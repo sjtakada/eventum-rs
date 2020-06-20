@@ -16,6 +16,7 @@ use std::time::Instant;
 use std::cmp::Ordering;
 
 use mio::*;
+use mio::event::*;
 use log::error;
 use log::debug;
 use quick_error::*;
@@ -25,9 +26,9 @@ pub const EVENT_MANAGER_TICK: u64 = 10;
 quick_error! {
     #[derive(Debug)]
     pub enum EventError {
-        GenericError(s: String) {
-            description("Generic Error")
-            display(r#"{}"#, s)
+        RegistryError {
+            description("Registry error")
+            display(r#"Registry error"#)
         }
         ChannelQueueEmpty {
             description("Channel queue is empty")
@@ -103,20 +104,30 @@ impl EventManager {
     }
 
     /// Register listen socket.
-    pub fn register_listen(&self, fd: &dyn Evented, handler: Arc<dyn EventHandler>) {
+    pub fn register_listen(&self, fd: &mut dyn Source, handler: Arc<dyn EventHandler>)
+                           -> Result<(), EventError> {
         let mut fd_events = self.fd_events.borrow_mut();
         let index = fd_events.index;
         let token = Token(index);
 
         fd_events.handlers.insert(token, handler);
-        fd_events.poll.register(fd, token, Ready::readable(), PollOpt::edge()).unwrap();
 
         // TODO: consider index wrap around?
         fd_events.index += 1;
+
+        if let Err(_) = fd_events.poll.registry().register(
+            fd,
+            token,
+            Interest::READABLE) {
+            Err(EventError::RegistryError)
+        } else {
+            Ok(())
+        }
     }
 
     /// Register read socket.
-    pub fn register_read(&self, fd: &dyn Evented, handler: Arc<dyn EventHandler>) {
+    pub fn register_read(&self, fd: &mut dyn Source, handler: Arc<dyn EventHandler>)
+                         -> Result<(), EventError> {
         let mut fd_events = self.fd_events.borrow_mut();
         let index = fd_events.index;
         let token = Token(index);
@@ -124,14 +135,23 @@ impl EventManager {
         handler.set_token(token);
 
         fd_events.handlers.insert(token, handler);
-        fd_events.poll.register(fd, token, Ready::readable(), PollOpt::level()).unwrap();
 
         // TODO: consider index wrap around?
         fd_events.index += 1;
+
+        if let Err(_) = fd_events.poll.registry().register(
+            fd,
+            token,
+            Interest::READABLE) {
+            Err(EventError::RegistryError)
+        } else {
+            Ok(())
+        }
     }
 
     /// Register write socket.
-    pub fn register_write(&self, fd: &dyn Evented, handler: Arc<dyn EventHandler>) {
+    pub fn register_write(&self, fd: &mut dyn Source, handler: Arc<dyn EventHandler>)
+                          -> Result<(), EventError> {
         let mut fd_events = self.fd_events.borrow_mut();
         let index = fd_events.index;
         let token = Token(index);
@@ -139,25 +159,35 @@ impl EventManager {
         handler.set_token(token);
 
         fd_events.handlers.insert(token, handler);
-        fd_events.poll.register(fd, token, Ready::writable(), PollOpt::level()).unwrap();
 
+        // TODO: consider index wrap around?
         fd_events.index += 1;
+
+        if let Err(_) = fd_events.poll.registry().register(
+            fd,
+            token,
+            Interest::WRITABLE) {
+            Err(EventError::RegistryError)
+        } else {
+            Ok(())
+        }
     }
 
     /// Unregister read socket.
-    pub fn unregister_read(&self, fd: &dyn Evented, token: Token) {
+    pub fn unregister_read(&self, fd: &mut dyn Source, token: Token) {
         let mut fd_events = self.fd_events.borrow_mut();
 
         let _e = fd_events.handlers.remove(&token);
-        fd_events.poll.deregister(fd).unwrap();
+        fd_events.poll.registry().deregister(fd).unwrap();
     }
 
     /// Poll and return events ready to read or write.
     pub fn poll_get_events(&self) -> Events {
-        let fd_events = self.fd_events.borrow_mut();
+        let mut fd_events = self.fd_events.borrow_mut();
         let mut events = Events::with_capacity(1024);
+        let timeout = fd_events.timeout;
 
-        match fd_events.poll.poll(&mut events, Some(fd_events.timeout)) {
+        match fd_events.poll.poll(&mut events, Some(timeout)) {
             Ok(_) => {},
             Err(_) => {}
         }
@@ -166,7 +196,7 @@ impl EventManager {
     }
 
     /// Return handler associated with token.
-    pub fn poll_get_handler(&self, event: Event) -> Option<Arc<dyn EventHandler>> {
+    pub fn poll_get_handler(&self, event: &Event) -> Option<Arc<dyn EventHandler>> {
         let fd_events = self.fd_events.borrow_mut();
         match fd_events.handlers.get(&event.token()) {
             Some(handler) => Some(handler.clone()),
@@ -181,9 +211,9 @@ impl EventManager {
 
         for event in events.iter() {
             if let Some(handler) = self.poll_get_handler(event) {
-                let result = if event.readiness() == Ready::readable() {
+                let result = if event.is_readable() {
                     handler.handle(EventType::ReadEvent)
-                } else if event.readiness() == Ready::writable() {
+                } else if event.is_writable() {
                     handler.handle(EventType::WriteEvent)
                 } else {
                     handler.handle(EventType::ErrorEvent)
@@ -275,21 +305,29 @@ impl EventManager {
 }
 
 /// Utility to blocking until fd gets readable.
-pub fn wait_until_readable(fd: &dyn Evented) {
-    let poll = Poll::new().unwrap();
-    poll.register(fd, Token(0), Ready::readable(), PollOpt::edge()).unwrap();
-    let mut events = Events::with_capacity(1024);
+pub fn wait_until_readable(fd: &mut dyn Source) -> Result<(), EventError> {
+    let mut poll = Poll::new().unwrap();
 
-    let _ = poll.poll(&mut events, None);
+    if let Err(_) = poll.registry().register(fd, Token(0), Interest::READABLE) {
+        Err(EventError::RegistryError)
+    } else {
+        let mut events = Events::with_capacity(1024);
+        let _ = poll.poll(&mut events, None);
+        Ok(())
+    }
 }
 
 /// Utility to blocking until fd gets writable.
-pub fn wait_until_writable(fd: &dyn Evented) {
-    let poll = Poll::new().unwrap();
-    poll.register(fd, Token(0), Ready::writable(), PollOpt::edge()).unwrap();
-    let mut events = Events::with_capacity(1024);
+pub fn wait_until_writable(fd: &mut dyn Source) -> Result<(), EventError> {
+    let mut poll = Poll::new().unwrap();
 
-    let _ = poll.poll(&mut events, None);
+    if let Err(_) = poll.registry().register(fd, Token(0), Interest::WRITABLE) {
+        Err(EventError::RegistryError)
+    } else {
+        let mut events = Events::with_capacity(1024);
+        let _ = poll.poll(&mut events, None);
+        Ok(())
+    }
 }
 
 
