@@ -24,7 +24,7 @@ pub const EVENT_MANAGER_TICK: u64 = 10;
 
 quick_error! {
     #[derive(Debug)]
-    pub enum CoreError {
+    pub enum EventError {
         GenericError(s: String) {
             description("Generic Error")
             display(r#"{}"#, s)
@@ -57,7 +57,7 @@ where Self: Send,
       Self: Sync
 {
     /// Handle event.
-    fn handle(&self, event_type: EventType) -> Result<(), CoreError>;
+    fn handle(&self, event_type: EventType) -> Result<(), EventError>;
 
     /// Set token to event handler.
     fn set_token(&self, _token: Token) {
@@ -89,12 +89,7 @@ impl EventManager {
     /// Constructor.
     pub fn new() -> EventManager {
         EventManager {
-            fd_events: RefCell::new(FdEvent {
-                index: 1,	// Reserve 0
-                handlers: HashMap::new(),
-                poll: Poll::new().unwrap(),
-                timeout: Duration::from_millis(EVENT_MANAGER_TICK),
-            }),
+            fd_events: RefCell::new(FdEvent::new()),
             tm_events: RefCell::new(TimerEvent::new()),
             ch_events: RefCell::new(ChannelEvent::new()),
         }
@@ -180,7 +175,7 @@ impl EventManager {
     }
 
     /// Poll FDs and handle events.
-    pub fn poll_fd(&self) -> Result<(), CoreError> {
+    pub fn poll_fd(&self) -> Result<(), EventError> {
         let events = self.poll_get_events();
         let mut terminated = false;
 
@@ -195,7 +190,7 @@ impl EventManager {
                 };
 
                 match result {
-                    Err(CoreError::SystemShutdown) => {
+                    Err(EventError::SystemShutdown) => {
                         terminated = true;
                     }
                     Err(err) => {
@@ -209,7 +204,7 @@ impl EventManager {
         }
 
         if terminated {
-            Err(CoreError::SystemShutdown)
+            Err(EventError::SystemShutdown)
         } else {
             Ok(())
         }
@@ -222,7 +217,7 @@ impl EventManager {
     }
 
     /// Poll timers and handle events.
-    pub fn poll_timer(&self) -> Result<(), CoreError> {
+    pub fn poll_timer(&self) -> Result<(), EventError> {
         while let Some(handler) = self.tm_events.borrow().run() {
             let result = handler.handle(EventType::TimerEvent);
 
@@ -245,7 +240,7 @@ impl EventManager {
     }
 
     /// Poll channel handlers.
-    pub fn poll_channel(&self) -> Result<(), CoreError> {
+    pub fn poll_channel(&self) -> Result<(), EventError> {
         self.ch_events.borrow_mut().poll_channel()
     }
 
@@ -256,7 +251,7 @@ impl EventManager {
     }
 
     /// Event loop, but just a single iteration of all possible events.
-    pub fn run(&self) -> Result<(), CoreError> {
+    pub fn run(&self) -> Result<(), EventError> {
         // Process FD events.
         if let Err(err) = self.poll_fd() {
             return Err(err)
@@ -316,6 +311,14 @@ pub struct FdEvent {
 
 impl FdEvent {
 
+    pub fn new() -> FdEvent {
+        FdEvent {
+            index: 1,	// Reserve 0
+            handlers: HashMap::new(),
+            poll: Poll::new().unwrap(),
+            timeout: Duration::from_millis(EVENT_MANAGER_TICK),
+        }
+    }
 }
 
 /// TimerHandler trait.
@@ -423,13 +426,13 @@ impl ChannelEvent {
     }
 
     /// Poll all channels and handle all messages.
-    pub fn poll_channel(&self) -> Result<(), CoreError> {
+    pub fn poll_channel(&self) -> Result<(), EventError> {
         if let Some(ref event_manager) = *self.event_manager.borrow() {
 
             for handler in self.handlers.borrow().iter() {
                 loop {
                     match (*handler).handle_message(event_manager.clone()) {
-                        Err(CoreError::ChannelQueueEmpty) => break,
+                        Err(EventError::ChannelQueueEmpty) => break,
                         Err(err) => return Err(err),
                         _ => {},
                     }
@@ -437,7 +440,7 @@ impl ChannelEvent {
             }
         }
 
-        Err(CoreError::ChannelQueueEmpty)
+        Err(EventError::ChannelQueueEmpty)
     }
 }
 
@@ -445,5 +448,5 @@ impl ChannelEvent {
 pub trait ChannelHandler {
 
     /// Handle message.
-    fn handle_message(&self, event_manager: Arc<EventManager>) -> Result<(), CoreError>;
+    fn handle_message(&self, event_manager: Arc<EventManager>) -> Result<(), EventError>;
 }
