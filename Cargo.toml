@@ -6,6 +6,6 @@ edition = "2018"
 
 [dependencies]
 quick-error = "1.2.3"
-mio = { version = "0.7.0", features = ["os-poll"] }
+mio = { version = "0.7.0", features = ["os-poll", "os-util", "uds"] }
 log = "0.4.8"
 simplelog = "0.7.4"

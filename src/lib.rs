@@ -248,7 +248,10 @@ impl EventManager {
 
     /// Poll timers and handle events.
     pub fn poll_timer(&self) -> Result<(), EventError> {
-        while let Some(handler) = self.tm_events.borrow().run() {
+/*
+        let tm_events = self.tm_events.borrow_mut();
+        {
+            while let Some(handler) = tm_events.run() {
             let result = handler.handle(EventType::TimerEvent);
 
             match result {
@@ -259,7 +262,9 @@ impl EventManager {
 
                 }
             }
+            }
         }
+*/
 
         Ok(())
     }
@@ -282,15 +287,18 @@ impl EventManager {
 
     /// Event loop, but just a single iteration of all possible events.
     pub fn run(&self) -> Result<(), EventError> {
+
         // Process FD events.
         if let Err(err) = self.poll_fd() {
             return Err(err)
         }
 
+/*
         // Process channels.
         if let Err(err) = self.poll_channel() {
             return Err(err)
         }
+*/
 
         // Process timer.
         if let Err(err) = self.poll_timer() {
@@ -487,4 +495,67 @@ pub trait ChannelHandler {
 
     /// Handle message.
     fn handle_message(&self, event_manager: Arc<EventManager>) -> Result<(), EventError>;
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mio::net::UnixListener;
+    use mio::net::UnixStream;
+    use std::path::Path;
+    use std::fs::*;
+    use std::thread;
+    use std::sync::Mutex;
+
+    struct TestListener {
+        accept: Mutex<bool>,
+    }
+
+    impl EventHandler for TestListener {
+        fn handle(&self, event_type: EventType) -> Result<(), EventError> {
+            match event_type {
+                EventType::ReadEvent => {
+                    *self.accept.lock().unwrap() = true;
+                    println!("Listener got a connection");
+                },
+                _ => {
+                    assert!(false);
+                }
+            };
+
+            Ok(())
+        }
+    }
+
+    #[test]
+    pub fn test_fd_event() {
+        let path = Path::new("/tmp/test_uds.sock");
+        remove_file(&path).unwrap();
+
+        let em = EventManager::new();
+        let mut listener = UnixListener::bind(path).unwrap();
+        let eh = Arc::new(TestListener { accept: Mutex::new(false) });
+
+        em.register_listen(&mut listener, eh.clone()).unwrap();
+
+        let _ = thread::spawn(move || {
+            match UnixStream::connect(&path) {
+                Ok(_stream) => {
+                    println!("Stream");
+                },
+                Err(_) => {
+                    println!("Connect error");
+                }
+            }
+
+            ()
+        });
+
+        if let Err(_) = em.run() {
+            assert!(false);
+        }
+
+        assert_eq!(*eh.accept.lock().unwrap(), true);
+    }
 }
