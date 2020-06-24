@@ -248,10 +248,9 @@ impl EventManager {
 
     /// Poll timers and handle events.
     pub fn poll_timer(&self) -> Result<(), EventError> {
-/*
+
         let tm_events = self.tm_events.borrow_mut();
-        {
-            while let Some(handler) = tm_events.run() {
+        while let Some(handler) = tm_events.run() {
             let result = handler.handle(EventType::TimerEvent);
 
             match result {
@@ -262,9 +261,7 @@ impl EventManager {
 
                 }
             }
-            }
         }
-*/
 
         Ok(())
     }
@@ -522,7 +519,7 @@ mod tests {
                 _ => {
                     assert!(false);
                 }
-            };
+            }
 
             Ok(())
         }
@@ -557,5 +554,70 @@ mod tests {
         }
 
         assert_eq!(*eh.accept.lock().unwrap(), true);
+    }
+
+    struct TimerEntry {
+        exp: Mutex<Instant>,
+        done: Mutex<bool>,
+    }
+
+    impl TimerEntry {
+        pub fn new(d: Duration) -> TimerEntry {
+            TimerEntry {
+                exp: Mutex::new(Instant::now() + d),
+                done: Mutex::new(false),
+            }
+        }
+
+        pub fn done(&self) -> bool {
+            *self.done.lock().unwrap()
+        }
+    }
+
+    impl EventHandler for TimerEntry {
+        fn handle(&self, event_type: EventType) -> Result<(), EventError> {
+            match event_type {
+                EventType::TimerEvent => {
+                    *self.done.lock().unwrap() = true;
+                }
+                _ => {
+                    assert!(false);
+                }
+            }
+
+            Ok(())
+        }
+    }
+
+    impl TimerHandler for TimerEntry {
+        fn expiration(&self) -> Instant {
+            let exp = self.exp.lock().unwrap();
+            *exp
+        }
+
+        fn set_expiration(&self, d: Duration) {
+            *self.exp.lock().unwrap() = Instant::now() + d;
+        }
+    }
+
+    #[test]
+    pub fn test_timer_event() {
+        let em = EventManager::new();
+        let d = Duration::from_secs(1);
+        let tc = Arc::new(TimerEntry::new(d));
+
+        em.register_timer(d, tc.clone());
+
+        if let Err(_) = em.run() {
+            assert!(false);
+        }
+        assert_eq!(tc.done(), false);
+
+        thread::sleep(Duration::from_millis(1100));
+
+        if let Err(_) = em.run() {
+            assert!(false);
+        }
+        assert_eq!(tc.done(), true);
     }
 }
