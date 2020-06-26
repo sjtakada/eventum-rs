@@ -7,6 +7,7 @@
 //
 
 use std::thread;
+use std::fmt;
 use std::collections::HashMap;
 use std::collections::BinaryHeap;
 use std::cell::RefCell;
@@ -48,7 +49,28 @@ pub enum EventType {
     ReadEvent,
     WriteEvent,
     TimerEvent,
+    ChannelEvent,
     ErrorEvent,
+}
+
+impl EventType {
+
+    pub fn to_string(&self) -> &str {
+        match *self {
+            EventType::BasicEvent => "Basic Event",
+            EventType::ReadEvent => "Read Event",
+            EventType::WriteEvent => "Write Event",
+            EventType::TimerEvent => "Timer Event",
+            EventType::ChannelEvent => "Channel Event",
+            EventType::ErrorEvent => "Error Event",
+        }
+    }
+}
+
+impl fmt::Debug for EventType {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self.to_string())
+    }
 }
 
 /// Event Handler trait.
@@ -75,6 +97,9 @@ where Self: Send,
 /// Event Manager.
 pub struct EventManager {
 
+    /// Immedate events.
+    im_events: RefCell<ImEvent>,
+
     /// FD Events.
     fd_events: RefCell<FdEvent>,
 
@@ -90,6 +115,7 @@ impl EventManager {
     /// Constructor.
     pub fn new() -> EventManager {
         EventManager {
+            im_events: RefCell::new(ImEvent::new()),
             fd_events: RefCell::new(FdEvent::new()),
             tm_events: RefCell::new(TimerEvent::new()),
             ch_events: RefCell::new(ChannelEvent::new()),
@@ -205,65 +231,41 @@ impl EventManager {
     }
 
     /// Poll FDs and handle events.
-    pub fn poll_fd(&self) -> Result<(), EventError> {
+    pub fn poll_fd(&self) -> Vec<(EventType, Arc<dyn EventHandler>)> {
         let events = self.poll_get_events();
-        let mut terminated = false;
+        let mut vec = Vec::new();
 
         for event in events.iter() {
             if let Some(handler) = self.poll_get_handler(event) {
-                let result = if event.is_readable() {
-                    handler.handle(EventType::ReadEvent)
+                if event.is_readable() {
+                    vec.push((EventType::ReadEvent, handler));
                 } else if event.is_writable() {
-                    handler.handle(EventType::WriteEvent)
+                    vec.push((EventType::WriteEvent, handler));
                 } else {
-                    handler.handle(EventType::ErrorEvent)
+                    vec.push((EventType::ErrorEvent, handler));
                 };
-
-                match result {
-                    Err(EventError::SystemShutdown) => {
-                        terminated = true;
-                    }
-                    Err(err) => {
-                        error!("Poll fd {:?}", err);
-                    }
-                    Ok(_) => {
-                        debug!("Poll fd OK");
-                    }
-                }
             }
         }
 
-        if terminated {
-            Err(EventError::SystemShutdown)
-        } else {
-            Ok(())
-        }
+        vec
     }
 
     /// Register timer.
-    pub fn register_timer(&self, d: Duration, handler: Arc<dyn TimerHandler>) {
+    pub fn register_timer(&self, d: Duration, handler: Arc<dyn EventHandler>) {
         let timers = self.tm_events.borrow();
         timers.register(d, handler);
     }
 
     /// Poll timers and handle events.
-    pub fn poll_timer(&self) -> Result<(), EventError> {
+    pub fn poll_timer(&self) -> Vec<(EventType, Arc<dyn EventHandler>)> {
+        let mut vec = Vec::new();
 
         let tm_events = self.tm_events.borrow_mut();
-        while let Some(handler) = tm_events.run() {
-            let result = handler.handle(EventType::TimerEvent);
-
-            match result {
-                Err(err) => {
-                    error!("Poll timer {:?}", err);
-                }
-                _ => {
-
-                }
-            }
+        while let Some(handler) = tm_events.poll() {
+            vec.push((EventType::TimerEvent, handler));
         }
 
-        Ok(())
+        vec
     }
 
     /// Register channel handler.
@@ -276,18 +278,13 @@ impl EventManager {
         self.ch_events.borrow_mut().poll_channel()
     }
 
-    /// Sleep certain period to have other events to occur.
-    pub fn sleep(&self) {
-        // TBD: we should sleep MIN(earlist timer, Tick).
-        thread::sleep(Duration::from_millis(EVENT_MANAGER_TICK));
-    }
-
-    /// Event loop, but just a single iteration of all possible events.
-    pub fn run(&self) -> Result<(), EventError> {
-
+    /// Poll and collect all runnable events.
+    pub fn poll(&self) -> Vec<(EventType, Arc<dyn EventHandler>)> {
+        let mut vec = Vec::new();
+        
         // Process FD events.
-        if let Err(err) = self.poll_fd() {
-            return Err(err)
+        for e in self.poll_fd() {
+            vec.push(e);
         }
 
 /*
@@ -298,14 +295,11 @@ impl EventManager {
 */
 
         // Process timer.
-        if let Err(err) = self.poll_timer() {
-            return Err(err)
+        for e in self.poll_timer() {
+            vec.push(e);
         }
 
-        // Wait a little bit.
-        self.sleep();
-
-        Ok(())
+        vec
     }
 }
 
@@ -332,6 +326,84 @@ pub fn wait_until_writable(fd: &mut dyn Source) -> Result<(), EventError> {
         let mut events = Events::with_capacity(1024);
         let _ = poll.poll(&mut events, None);
         Ok(())
+    }
+}
+
+/// Trait EventRunner.
+pub trait EventRunner {
+
+    /// Run events.
+    fn run(&self, events: Vec<(EventType, Arc<dyn EventHandler>)>) -> Result<(), EventError>;
+}
+
+
+/// Default event runner {
+pub struct SimpleRunner {
+
+}
+
+impl SimpleRunner {
+
+    /// Constructor.
+    pub fn new() -> SimpleRunner {
+        SimpleRunner {
+        }
+    }
+
+    /// Sleep certain period to have other events to occur.
+    pub fn sleep(&self) {
+        // TBD: we should sleep MIN(earlist timer, Tick).
+        thread::sleep(Duration::from_millis(EVENT_MANAGER_TICK));
+    }
+}
+
+impl EventRunner for SimpleRunner {
+
+    /// Run events, return last event error.
+    fn run(&self, events: Vec<(EventType, Arc<dyn EventHandler>)>) -> Result<(), EventError> {
+        let mut result = Ok(());
+
+        for (event_type, handler) in events {
+            debug!("Event {:?}", event_type);
+            result = handler.handle(event_type);
+        }
+
+        result
+    }
+}
+
+/// Helper.
+pub fn poll_and_run(manager: &mut EventManager, runner: Box<dyn EventRunner>) {
+
+    loop {
+        let events = manager.poll();
+        let result = runner.run(events);
+
+        match result {
+            Err(EventError::SystemShutdown) => break,
+            _ => {}
+        }
+    }
+}
+
+
+/// Immedate Event.
+pub struct ImEvent {
+
+    /// High priority events.
+    high: Vec<Arc<dyn EventHandler>>,
+
+    /// Low priority events.
+    low: Vec<Arc<dyn EventHandler>>,
+}
+
+impl ImEvent {
+
+    pub fn new() -> ImEvent {
+        ImEvent {
+            high: Vec::new(),
+            low: Vec::new(),
+        }
     }
 }
 
@@ -365,33 +437,47 @@ impl FdEvent {
 }
 
 /// TimerHandler trait.
-pub trait TimerHandler: EventHandler
-where Self: Send,
-      Self: Sync
-{
-    /// Get expiration time.
-    fn expiration(&self) -> Instant;
+pub struct TimerHandler {
 
-    /// Set expiration time.
-    fn set_expiration(&self, d: Duration) -> ();
+    /// Expiration time.
+    exp: Instant,
+
+    /// EventHandler
+    handler: Arc<dyn EventHandler>,
 }
 
-impl Ord for dyn TimerHandler {
+impl TimerHandler {
+
+    /// Constructor.
+    pub fn new(d: Duration, handler: Arc<dyn EventHandler>) -> TimerHandler {
+        TimerHandler {
+            exp: Instant::now() + d,
+            handler,
+        }
+    }
+
+    /// Get expiration time.
+    pub fn expiration(&self) -> Instant {
+        self.exp
+    }
+}
+
+impl Ord for TimerHandler {
     fn cmp(&self, other: &Self) -> Ordering {
 	other.expiration().cmp(&self.expiration())
     }
 }
 
-impl PartialOrd for dyn TimerHandler {
+impl PartialOrd for TimerHandler {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
 	Some(self.cmp(other))
     }
 }
 
-impl Eq for dyn TimerHandler {
+impl Eq for TimerHandler {
 }
 
-impl PartialEq for dyn TimerHandler {
+impl PartialEq for TimerHandler {
     fn eq(&self, other: &Self) -> bool {
         other.expiration() == self.expiration()
     }
@@ -401,7 +487,7 @@ impl PartialEq for dyn TimerHandler {
 pub struct TimerEvent {
 
     /// Ordering handler by expiration time.
-    heap: RefCell<BinaryHeap<Arc<dyn TimerHandler>>>
+    heap: RefCell<BinaryHeap<TimerHandler>>
 }
 
 impl TimerEvent {
@@ -414,13 +500,14 @@ impl TimerEvent {
     }
 
     /// Register timer handler.
-    pub fn register(&self, d: Duration, handler: Arc<dyn TimerHandler>) {
-        handler.set_expiration(d);
-        self.heap.borrow_mut().push(handler);
+    pub fn register(&self, d: Duration, handler: Arc<dyn EventHandler>) {
+        let timer_handler = TimerHandler::new(d, handler);
+
+        self.heap.borrow_mut().push(timer_handler);
     }
 
     /// Pop a timer handler if it is expired.
-    fn pop_if_expired(&self) -> Option<Arc<dyn TimerHandler>> {
+    fn pop_if_expired(&self) -> Option<TimerHandler> {
         if match self.heap.borrow_mut().peek() {
             Some(handler) if handler.expiration() < Instant::now() => true,
             _ => false,
@@ -432,8 +519,11 @@ impl TimerEvent {
     }
 
     /// Run all expired event handler.
-    pub fn run(&self) -> Option<Arc<dyn TimerHandler>> {
-        self.pop_if_expired()
+    pub fn poll(&self) -> Option<Arc<dyn EventHandler>> {
+        match self.pop_if_expired() {
+            Some(timer_handler) => Some(timer_handler.handler),
+            None => None,
+        }
     }
 }
 
@@ -549,22 +639,20 @@ mod tests {
             ()
         });
 
-        if let Err(_) = em.run() {
-            assert!(false);
-        }
+        let runner = SimpleRunner::new();
+        let events = em.poll();
+        let result = runner.run(events);
 
         assert_eq!(*eh.accept.lock().unwrap(), true);
     }
 
     struct TimerEntry {
-        exp: Mutex<Instant>,
         done: Mutex<bool>,
     }
 
     impl TimerEntry {
-        pub fn new(d: Duration) -> TimerEntry {
+        pub fn new() -> TimerEntry {
             TimerEntry {
-                exp: Mutex::new(Instant::now() + d),
                 done: Mutex::new(false),
             }
         }
@@ -589,35 +677,24 @@ mod tests {
         }
     }
 
-    impl TimerHandler for TimerEntry {
-        fn expiration(&self) -> Instant {
-            let exp = self.exp.lock().unwrap();
-            *exp
-        }
-
-        fn set_expiration(&self, d: Duration) {
-            *self.exp.lock().unwrap() = Instant::now() + d;
-        }
-    }
-
     #[test]
     pub fn test_timer_event() {
         let em = EventManager::new();
         let d = Duration::from_secs(1);
-        let tc = Arc::new(TimerEntry::new(d));
+        let tc = Arc::new(TimerEntry::new());
+        let runner = SimpleRunner::new();
 
         em.register_timer(d, tc.clone());
+        let events = em.poll();
+        runner.run(events);
 
-        if let Err(_) = em.run() {
-            assert!(false);
-        }
         assert_eq!(tc.done(), false);
 
         thread::sleep(Duration::from_millis(1100));
 
-        if let Err(_) = em.run() {
-            assert!(false);
-        }
+        let events = em.poll();
+        runner.run(events);
+
         assert_eq!(tc.done(), true);
     }
 }
