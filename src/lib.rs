@@ -700,16 +700,26 @@ mod tests {
         desc: Option<String>,
     }
 
+    impl TestState {
+        pub fn new() -> TestState {
+            TestState {
+                number: None,
+                desc: None,
+            }
+        }
+    }
+
     pub struct TestChannelHandler {
         receiver: mpsc::Receiver<TestMessage>,
         state: Arc<Mutex<TestState>>,
     }
 
     impl TestChannelHandler {
-        pub fn new(receiver: mpsc::Receiver<TestMessage>) -> TestChannelHandler {
+        pub fn new(receiver: mpsc::Receiver<TestMessage>,
+                   state: Arc<Mutex<TestState>>) -> TestChannelHandler {
             TestChannelHandler {
                 receiver: receiver,
-                state: Arc::new(Mutex::new(TestState{ number: None, desc: None })),
+                state: state,
             }
         }
     }
@@ -775,8 +785,9 @@ mod tests {
         let runner = SimpleRunner::new();
 
         let (sender, receiver) = mpsc::channel::<TestMessage>();
+        let state = Arc::new(Mutex::new(TestState::new()));
 
-        let channel_handler = TestChannelHandler::new(receiver);
+        let channel_handler = TestChannelHandler::new(receiver, state.clone());
         em.register_channel(Box::new(channel_handler));
 
         thread::spawn(move || {
@@ -785,5 +796,9 @@ mod tests {
 
         let events = em.poll();
         runner.run(events).unwrap();
+
+        let state = state.lock().unwrap();
+        assert_eq!(state.number, Some(100));
+        assert_eq!(state.desc, None);
     }
 }
