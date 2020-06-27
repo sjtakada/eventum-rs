@@ -12,6 +12,7 @@ use std::collections::HashMap;
 use std::collections::BinaryHeap;
 use std::cell::RefCell;
 use std::sync::Arc;
+use std::sync::mpsc;
 use std::time::Duration;
 use std::time::Instant;
 use std::cmp::Ordering;
@@ -122,12 +123,14 @@ impl EventManager {
         }
     }
 
+/*
     /// TBD: need to be cleaned up.
     pub fn init_channel_manager(event_manager: Arc<EventManager>) {
         let event_manager_clone = event_manager.clone();
 
         event_manager.ch_events.borrow_mut().set_event_manager(event_manager_clone);
     }
+*/
 
     /// Register listen socket.
     pub fn register_listen(&self, fd: &mut dyn Source, handler: Arc<dyn EventHandler>)
@@ -274,7 +277,7 @@ impl EventManager {
     }
 
     /// Poll channel handlers.
-    pub fn poll_channel(&self) -> Result<(), EventError> {
+    pub fn poll_channel(&self) -> Vec<(EventType, Arc<dyn EventHandler>)> {
         self.ch_events.borrow_mut().poll_channel()
     }
 
@@ -287,12 +290,10 @@ impl EventManager {
             vec.push(e);
         }
 
-/*
         // Process channels.
-        if let Err(err) = self.poll_channel() {
-            return Err(err)
+        for e in self.poll_channel() {
+            vec.push(e);
         }
-*/
 
         // Process timer.
         for e in self.poll_timer() {
@@ -531,9 +532,6 @@ impl TimerEvent {
 /// Channel Manager.
 pub struct ChannelEvent
 {
-    /// EventManager.
-    event_manager: RefCell<Option<Arc<EventManager>>>,
-
     /// Channel Message Handlers.
     handlers: RefCell<Vec<Box<dyn ChannelHandler>>>,
 }
@@ -543,14 +541,8 @@ impl ChannelEvent {
     /// Constructor.
     pub fn new() -> ChannelEvent {
         ChannelEvent {
-            event_manager: RefCell::new(None),
             handlers: RefCell::new(Vec::new()),
         }
-    }
-
-    /// Set Event Manager.
-    pub fn set_event_manager(&self, event_manager: Arc<EventManager>) {
-        self.event_manager.borrow_mut().replace(event_manager);
     }
 
     /// Register handler.
@@ -559,31 +551,25 @@ impl ChannelEvent {
     }
 
     /// Poll all channels and handle all messages.
-    pub fn poll_channel(&self) -> Result<(), EventError> {
-        if let Some(ref event_manager) = *self.event_manager.borrow() {
+    pub fn poll_channel(&self) -> Vec<(EventType, Arc<dyn EventHandler>)> {
+        let mut vec = Vec::new();
 
-            for handler in self.handlers.borrow().iter() {
-                loop {
-                    match (*handler).handle_message(event_manager.clone()) {
-                        Err(EventError::ChannelQueueEmpty) => break,
-                        Err(err) => return Err(err),
-                        _ => {},
-                    }
-                }
-            }
+        for handler in self.handlers.borrow().iter() {
+            let mut tmp = (*handler).poll_channel();
+
+            vec.append(&mut tmp);
         }
 
-        Err(EventError::ChannelQueueEmpty)
+        vec
     }
 }
 
 /// Channel Handler trait.
 pub trait ChannelHandler {
 
-    /// Handle message.
-    fn handle_message(&self, event_manager: Arc<EventManager>) -> Result<(), EventError>;
+    /// Poll channel.
+    fn poll_channel(&self) -> Vec<(EventType, Arc<dyn EventHandler>)>;
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -696,5 +682,62 @@ mod tests {
         runner.run(events);
 
         assert_eq!(tc.done(), true);
+    }
+
+
+
+    pub struct TestMessage {
+        a: i32,
+        b: String,
+    }
+
+    pub struct TestChannelHandler {
+
+        receiver: mpsc::Receiver<TestMessage>,
+    }
+
+    impl ChannelHandler for TestChannelHandler {
+
+        /// Poll channel.
+        fn poll_channel(&self) -> Vec<(EventType, Arc<dyn EventHandler>)> {
+            let mut vec = Vec::new();
+
+            while let Ok(d) = self.receiver.try_recv() {
+                let handler = TestMessageHandler::new(d);
+
+                vec.push((EventType::ChannelEvent, handler));
+            }
+
+            vec
+        }
+    }
+
+    pub struct TestMessageHandler {
+
+        message: TestMessage,
+    }
+
+    impl TestMessageHandler {
+
+        pub fn new(message: TestMessage) -> Arc<dyn EventHandler> {
+            Arc::new(TestMessageHandler {
+                message: message,
+            })
+        }
+    }
+
+    impl EventHandler for TestMessageHandler {
+
+        /// Handle event.
+        fn handle(&self, event_type: EventType) -> Result<(), EventError> {
+
+            Ok(())
+        }
+    }
+
+
+    #[test]
+    pub fn test_channel_event() {
+
     }
 }
