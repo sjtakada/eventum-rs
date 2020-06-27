@@ -2,9 +2,12 @@
 // Eventum
 //   Copyright (C) 2020 Toshiaki Takada
 //
-// FdEvent
+// Event machine
+//  File Descriptor events
+//  Timer events
+//  Channel events
 //
-//
+
 
 use std::thread;
 use std::fmt;
@@ -46,7 +49,7 @@ quick_error! {
 
 /// Event types.
 pub enum EventType {
-    BasicEvent,
+    SimpleEvent,
     ReadEvent,
     WriteEvent,
     TimerEvent,
@@ -58,7 +61,7 @@ impl EventType {
 
     pub fn to_string(&self) -> &str {
         match *self {
-            EventType::BasicEvent => "Basic Event",
+            EventType::SimpleEvent => "Simple Event",
             EventType::ReadEvent => "Read Event",
             EventType::WriteEvent => "Write Event",
             EventType::TimerEvent => "Timer Event",
@@ -98,17 +101,17 @@ where Self: Send,
 /// Event Manager.
 pub struct EventManager {
 
-    /// Immedate events.
-    im_events: RefCell<ImEvent>,
+    /// Simple events.
+    basic: RefCell<SimpleManager>,
 
-    /// FD Events.
-    fd_events: RefCell<FdEvent>,
+    /// File descriptor (read/write) events.
+    fdesc: RefCell<FdescManager>,
 
-    /// Timer Events.
-    tm_events: RefCell<TimerEvent>,
+    /// Timer events.
+    timer: RefCell<TimerManager>,
 
     /// Channel events.
-    ch_events: RefCell<ChannelEvent>,
+    channel: RefCell<ChannelManager>,
 }
 
 impl EventManager {
@@ -116,35 +119,26 @@ impl EventManager {
     /// Constructor.
     pub fn new() -> EventManager {
         EventManager {
-            im_events: RefCell::new(ImEvent::new()),
-            fd_events: RefCell::new(FdEvent::new()),
-            tm_events: RefCell::new(TimerEvent::new()),
-            ch_events: RefCell::new(ChannelEvent::new()),
+            basic: RefCell::new(SimpleManager::new()),
+            fdesc: RefCell::new(FdescManager::new()),
+            timer: RefCell::new(TimerManager::new()),
+            channel: RefCell::new(ChannelManager::new()),
         }
     }
-
-/*
-    /// TBD: need to be cleaned up.
-    pub fn init_channel_manager(event_manager: Arc<EventManager>) {
-        let event_manager_clone = event_manager.clone();
-
-        event_manager.ch_events.borrow_mut().set_event_manager(event_manager_clone);
-    }
-*/
 
     /// Register listen socket.
     pub fn register_listen(&self, fd: &mut dyn Source, handler: Arc<dyn EventHandler>)
                            -> Result<(), EventError> {
-        let mut fd_events = self.fd_events.borrow_mut();
-        let index = fd_events.index;
+        let mut fdesc = self.fdesc.borrow_mut();
+        let index = fdesc.index;
         let token = Token(index);
 
-        fd_events.handlers.insert(token, handler);
+        fdesc.handlers.insert(token, handler);
 
         // TODO: consider index wrap around?
-        fd_events.index += 1;
+        fdesc.index += 1;
 
-        if let Err(_) = fd_events.poll.registry().register(
+        if let Err(_) = fdesc.poll.registry().register(
             fd,
             token,
             Interest::READABLE) {
@@ -157,18 +151,18 @@ impl EventManager {
     /// Register read socket.
     pub fn register_read(&self, fd: &mut dyn Source, handler: Arc<dyn EventHandler>)
                          -> Result<(), EventError> {
-        let mut fd_events = self.fd_events.borrow_mut();
-        let index = fd_events.index;
+        let mut fdesc = self.fdesc.borrow_mut();
+        let index = fdesc.index;
         let token = Token(index);
 
         handler.set_token(token);
 
-        fd_events.handlers.insert(token, handler);
+        fdesc.handlers.insert(token, handler);
 
         // TODO: consider index wrap around?
-        fd_events.index += 1;
+        fdesc.index += 1;
 
-        if let Err(_) = fd_events.poll.registry().register(
+        if let Err(_) = fdesc.poll.registry().register(
             fd,
             token,
             Interest::READABLE) {
@@ -181,18 +175,18 @@ impl EventManager {
     /// Register write socket.
     pub fn register_write(&self, fd: &mut dyn Source, handler: Arc<dyn EventHandler>)
                           -> Result<(), EventError> {
-        let mut fd_events = self.fd_events.borrow_mut();
-        let index = fd_events.index;
+        let mut fdesc = self.fdesc.borrow_mut();
+        let index = fdesc.index;
         let token = Token(index);
 
         handler.set_token(token);
 
-        fd_events.handlers.insert(token, handler);
+        fdesc.handlers.insert(token, handler);
 
         // TODO: consider index wrap around?
-        fd_events.index += 1;
+        fdesc.index += 1;
 
-        if let Err(_) = fd_events.poll.registry().register(
+        if let Err(_) = fdesc.poll.registry().register(
             fd,
             token,
             Interest::WRITABLE) {
@@ -204,19 +198,19 @@ impl EventManager {
 
     /// Unregister read socket.
     pub fn unregister_read(&self, fd: &mut dyn Source, token: Token) {
-        let mut fd_events = self.fd_events.borrow_mut();
+        let mut fdesc = self.fdesc.borrow_mut();
 
-        let _e = fd_events.handlers.remove(&token);
-        fd_events.poll.registry().deregister(fd).unwrap();
+        let _e = fdesc.handlers.remove(&token);
+        fdesc.poll.registry().deregister(fd).unwrap();
     }
 
     /// Poll and return events ready to read or write.
     pub fn poll_get_events(&self) -> Events {
-        let mut fd_events = self.fd_events.borrow_mut();
+        let mut fdesc = self.fdesc.borrow_mut();
         let mut events = Events::with_capacity(1024);
-        let timeout = fd_events.timeout;
+        let timeout = fdesc.timeout;
 
-        match fd_events.poll.poll(&mut events, Some(timeout)) {
+        match fdesc.poll.poll(&mut events, Some(timeout)) {
             Ok(_) => {},
             Err(_) => {}
         }
@@ -226,8 +220,8 @@ impl EventManager {
 
     /// Return handler associated with token.
     pub fn poll_get_handler(&self, event: &Event) -> Option<Arc<dyn EventHandler>> {
-        let fd_events = self.fd_events.borrow_mut();
-        match fd_events.handlers.get(&event.token()) {
+        let fdesc = self.fdesc.borrow_mut();
+        match fdesc.handlers.get(&event.token()) {
             Some(handler) => Some(handler.clone()),
             None => None,
         }
@@ -255,7 +249,7 @@ impl EventManager {
 
     /// Register timer.
     pub fn register_timer(&self, d: Duration, handler: Arc<dyn EventHandler>) {
-        let timers = self.tm_events.borrow();
+        let timers = self.timer.borrow();
         timers.register(d, handler);
     }
 
@@ -263,8 +257,8 @@ impl EventManager {
     pub fn poll_timer(&self) -> Vec<(EventType, Arc<dyn EventHandler>)> {
         let mut vec = Vec::new();
 
-        let tm_events = self.tm_events.borrow_mut();
-        while let Some(handler) = tm_events.poll() {
+        let timer = self.timer.borrow_mut();
+        while let Some(handler) = timer.poll() {
             vec.push((EventType::TimerEvent, handler));
         }
 
@@ -273,12 +267,12 @@ impl EventManager {
 
     /// Register channel handler.
     pub fn register_channel(&self, handler: Box<dyn ChannelHandler>) {
-        self.ch_events.borrow_mut().register_handler(handler);
+        self.channel.borrow_mut().register_handler(handler);
     }
 
     /// Poll channel handlers.
     pub fn poll_channel(&self) -> Vec<(EventType, Arc<dyn EventHandler>)> {
-        self.ch_events.borrow_mut().poll_channel()
+        self.channel.borrow_mut().poll_channel()
     }
 
     /// Poll and collect all runnable events.
@@ -388,8 +382,8 @@ pub fn poll_and_run(manager: &mut EventManager, runner: Box<dyn EventRunner>) {
 }
 
 
-/// Immedate Event.
-pub struct ImEvent {
+/// Simple manager.
+struct SimpleManager {
 
     /// High priority events.
     high: Vec<Arc<dyn EventHandler>>,
@@ -398,10 +392,10 @@ pub struct ImEvent {
     low: Vec<Arc<dyn EventHandler>>,
 }
 
-impl ImEvent {
+impl SimpleManager {
 
-    pub fn new() -> ImEvent {
-        ImEvent {
+    pub fn new() -> SimpleManager {
+        SimpleManager {
             high: Vec::new(),
             low: Vec::new(),
         }
@@ -409,8 +403,8 @@ impl ImEvent {
 }
 
 
-/// File Descriptor Event.
-pub struct FdEvent {
+/// File Descriptor manager.
+struct FdescManager {
 
     /// Token index.
     index: usize,
@@ -425,10 +419,10 @@ pub struct FdEvent {
     timeout: Duration,
 }
 
-impl FdEvent {
+impl FdescManager {
 
-    pub fn new() -> FdEvent {
-        FdEvent {
+    pub fn new() -> FdescManager {
+        FdescManager {
             index: 1,	// Reserve 0
             handlers: HashMap::new(),
             poll: Poll::new().unwrap(),
@@ -484,18 +478,18 @@ impl PartialEq for TimerHandler {
     }
 }
 
-/// Timer event.
-pub struct TimerEvent {
+/// Timer manager.
+struct TimerManager {
 
     /// Ordering handler by expiration time.
     heap: RefCell<BinaryHeap<TimerHandler>>
 }
 
-impl TimerEvent {
+impl TimerManager {
 
     /// Constructor.
-    pub fn new() -> TimerEvent {
-        TimerEvent {
+    pub fn new() -> TimerManager {
+        TimerManager {
             heap: RefCell::new(BinaryHeap::new())
         }
     }
@@ -529,18 +523,18 @@ impl TimerEvent {
 }
 
 
-/// Channel Manager.
-pub struct ChannelEvent
+/// Channel manager.
+struct ChannelManager
 {
     /// Channel Message Handlers.
     handlers: RefCell<Vec<Box<dyn ChannelHandler>>>,
 }
 
-impl ChannelEvent {
+impl ChannelManager {
 
     /// Constructor.
-    pub fn new() -> ChannelEvent {
-        ChannelEvent {
+    pub fn new() -> ChannelManager {
+        ChannelManager {
             handlers: RefCell::new(Vec::new()),
         }
     }
@@ -580,6 +574,10 @@ mod tests {
     use std::fs::*;
     use std::thread;
     use std::sync::Mutex;
+
+    /// 
+    /// 
+    ///
 
     struct TestListener {
         accept: Mutex<bool>,
@@ -683,7 +681,6 @@ mod tests {
 
         assert_eq!(tc.done(), true);
     }
-
 
 
     pub struct TestMessage {
