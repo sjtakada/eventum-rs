@@ -125,6 +125,28 @@ impl EventManager {
         }
     }
 
+    /// Register a low priority event.
+    pub fn register_low(&self, handler: Arc<dyn EventHandler>) {
+        self.simple.borrow_mut().register_low(handler);
+    }
+
+    /// Register a high priority event.
+    pub fn register_high(&self, handler: Arc<dyn EventHandler>) {
+        self.simple.borrow_mut().register_high(handler);
+    }
+
+    /// Poll low priority events.
+    pub fn poll_low(&self) -> Vec<(EventType, Arc<dyn EventHandler>)> {
+        let mut simple = self.simple.borrow_mut();
+        simple.low.drain(..).map(|h| (EventType::SimpleEvent, h)).collect()
+    }
+
+    /// Poll high priority events.
+    pub fn poll_high(&self) -> Vec<(EventType, Arc<dyn EventHandler>)> {
+        let mut simple = self.simple.borrow_mut();
+        simple.high.drain(..).map(|h| (EventType::SimpleEvent, h)).collect()
+    }
+
     /// Register listen socket.
     pub fn register_listen(&self, fd: &mut dyn Source, handler: Arc<dyn EventHandler>)
                            -> Result<(), EventError> {
@@ -275,24 +297,26 @@ impl EventManager {
     }
 
     /// Poll and collect all runnable events.
+    /// To dispatch and do handling depends on a runner.
     pub fn poll(&self) -> Vec<(EventType, Arc<dyn EventHandler>)> {
         let mut vec = Vec::new();
         
+        // High priority events.
+        vec.append(&mut self.poll_high());
+
         // Process FD events.
-        for e in self.poll_fd() {
-            vec.push(e);
-        }
+        vec.append(&mut self.poll_fd());
 
         // Process channels.
-        for e in self.poll_channel() {
-            vec.push(e);
-        }
+        vec.append(&mut self.poll_channel());
 
         // Process timer.
-        for e in self.poll_timer() {
-            vec.push(e);
-        }
+        vec.append(&mut self.poll_timer());
 
+        // Low priority events.
+        vec.append(&mut self.poll_low());
+
+        // Return events vector.
         vec
     }
 }
@@ -331,7 +355,7 @@ pub trait EventRunner {
 }
 
 
-/// Default event runner {
+/// Default event runner
 pub struct SimpleRunner {
 
 }
@@ -398,6 +422,14 @@ impl SimplePoller {
             high: Vec::new(),
             low: Vec::new(),
         }
+    }
+
+    pub fn register_low(&mut self, handler: Arc<dyn EventHandler>, ) {
+        self.low.push(handler);
+    }
+
+    pub fn register_high(&mut self, handler: Arc<dyn EventHandler>, ) {
+        self.high.push(handler);
     }
 }
 
@@ -575,6 +607,64 @@ mod tests {
     use std::sync::Mutex;
     use std::sync::mpsc;
 
+    /// Simple event test.
+    struct TestState {
+        vec: Vec<u32>,
+    }
+
+    impl TestState {
+        pub fn new() -> TestState {
+            TestState {
+                vec: Vec::new(),
+            }
+        }
+    }
+
+    struct TestHandler {
+        priority: u32,
+        state: Arc<Mutex<TestState>>,
+    }
+
+    impl EventHandler for TestHandler {
+        fn handle(&self, event_type: EventType) -> Result<(), EventError> {
+            match event_type {
+                EventType::SimpleEvent => {
+                    let state = self.state.clone();
+                    let mut state = state.lock().unwrap();
+
+                    state.vec.push(self.priority);
+                }
+                _ => {
+                    assert!(false);
+                }
+            }
+
+            Ok(())
+        }
+    }
+
+    #[test]
+    pub fn test_simple_event() {
+        let em = EventManager::new();
+        let state = Arc::new(Mutex::new(TestState::new()));
+
+        let handler1 = TestHandler { state: state.clone(), priority: 100 };
+        let handler2 = TestHandler { state: state.clone(), priority: 200 };
+
+        em.register_low(Arc::new(handler1));
+        em.register_high(Arc::new(handler2));
+
+        let runner = SimpleRunner::new();
+        let events = em.poll();
+        runner.run(events).unwrap();
+
+        let state = state.lock().unwrap();
+
+        assert_eq!(state.vec[0], 200);
+        assert_eq!(state.vec[1], 100);
+    }
+
+
     /// File Descriptor event test.
     ///  Create a UNIX domain socket server and listen, and connect to the socket
     ///  from another thread, and the server accept it.
@@ -589,7 +679,7 @@ mod tests {
                 EventType::ReadEvent => {
                     *self.accept.lock().unwrap() = true;
                     println!("Listener got a connection");
-                },
+                }
                 _ => {
                     assert!(false);
                 }
@@ -614,7 +704,7 @@ mod tests {
             match UnixStream::connect(&path) {
                 Ok(_stream) => {
                     println!("Stream");
-                },
+                }
                 Err(_) => {
                     println!("Connect error");
                 }
@@ -674,35 +764,35 @@ mod tests {
 
         em.register_timer(d, tc.clone());
         let events = em.poll();
-        runner.run(events);
+        runner.run(events).unwrap();
 
         assert_eq!(tc.done(), false);
 
         thread::sleep(Duration::from_millis(1100));
 
         let events = em.poll();
-        runner.run(events);
+        runner.run(events).unwrap();
 
         assert_eq!(tc.done(), true);
     }
 
     /// Channel event test.
-    ///
-    ///
+    ///  Create a channel handler and a message handler, sending a message
+    ///  from another thread and check if it is handled by message handler.
 
     pub enum TestMessage {
         Number(i32),
         Desc(String)
     }
 
-    pub struct TestState {
+    pub struct TestMessageState {
         number: Option<i32>,
         desc: Option<String>,
     }
 
-    impl TestState {
-        pub fn new() -> TestState {
-            TestState {
+    impl TestMessageState {
+        pub fn new() -> TestMessageState {
+            TestMessageState {
                 number: None,
                 desc: None,
             }
@@ -711,12 +801,12 @@ mod tests {
 
     pub struct TestChannelHandler {
         receiver: mpsc::Receiver<TestMessage>,
-        state: Arc<Mutex<TestState>>,
+        state: Arc<Mutex<TestMessageState>>,
     }
 
     impl TestChannelHandler {
         pub fn new(receiver: mpsc::Receiver<TestMessage>,
-                   state: Arc<Mutex<TestState>>) -> TestChannelHandler {
+                   state: Arc<Mutex<TestMessageState>>) -> TestChannelHandler {
             TestChannelHandler {
                 receiver: receiver,
                 state: state,
@@ -742,11 +832,11 @@ mod tests {
 
     pub struct TestMessageHandler {
         message: TestMessage,
-        state: Arc<Mutex<TestState>>,
+        state: Arc<Mutex<TestMessageState>>,
     }
 
     impl TestMessageHandler {
-        pub fn new(message: TestMessage, state: Arc<Mutex<TestState>>) -> Arc<dyn EventHandler> {
+        pub fn new(message: TestMessage, state: Arc<Mutex<TestMessageState>>) -> Arc<dyn EventHandler> {
             Arc::new(TestMessageHandler {
                 message: message,
                 state: state,
@@ -785,7 +875,7 @@ mod tests {
         let runner = SimpleRunner::new();
 
         let (sender, receiver) = mpsc::channel::<TestMessage>();
-        let state = Arc::new(Mutex::new(TestState::new()));
+        let state = Arc::new(Mutex::new(TestMessageState::new()));
 
         let channel_handler = TestChannelHandler::new(receiver, state.clone());
         em.register_channel(Box::new(channel_handler));
