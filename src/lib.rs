@@ -695,9 +695,23 @@ mod tests {
         Desc(String)
     }
 
-    pub struct TestChannelHandler {
+    pub struct TestState {
+        number: Option<i32>,
+        desc: Option<String>,
+    }
 
+    pub struct TestChannelHandler {
         receiver: mpsc::Receiver<TestMessage>,
+        state: Arc<Mutex<TestState>>,
+    }
+
+    impl TestChannelHandler {
+        pub fn new(receiver: mpsc::Receiver<TestMessage>) -> TestChannelHandler {
+            TestChannelHandler {
+                receiver: receiver,
+                state: Arc::new(Mutex::new(TestState{ number: None, desc: None })),
+            }
+        }
     }
 
     impl ChannelHandler for TestChannelHandler {
@@ -707,7 +721,7 @@ mod tests {
             let mut vec = Vec::new();
 
             while let Ok(d) = self.receiver.try_recv() {
-                let handler = TestMessageHandler::new(d);
+                let handler = TestMessageHandler::new(d, self.state.clone());
 
                 vec.push((EventType::ChannelEvent, handler));
             }
@@ -717,28 +731,38 @@ mod tests {
     }
 
     pub struct TestMessageHandler {
-
         message: TestMessage,
+        state: Arc<Mutex<TestState>>,
     }
 
     impl TestMessageHandler {
-
-        pub fn new(message: TestMessage) -> Arc<dyn EventHandler> {
+        pub fn new(message: TestMessage, state: Arc<Mutex<TestState>>) -> Arc<dyn EventHandler> {
             Arc::new(TestMessageHandler {
                 message: message,
+                state: state,
             })
         }
     }
 
     impl EventHandler for TestMessageHandler {
-
         /// Handle event.
         fn handle(&self, event_type: EventType) -> Result<(), EventError> {
             match event_type {
-                EventType::ChannelEvent => {
+                EventType::ChannelEvent => match &self.message {
+                    TestMessage::Number(i) => {
+                        let state = self.state.clone();
+                        let mut state = state.lock().unwrap();
+
+                        (*state).number.replace(*i);
+                    },
+                    TestMessage::Desc(s) => {
+                        let state = self.state.clone();
+                        let mut state = state.lock().unwrap();
+
+                        (*state).desc.replace(s.clone());
+                    }                       
                 }
-                _ => {
-                }
+                _ => assert!(false),
             }
 
             Ok(())
@@ -752,7 +776,7 @@ mod tests {
 
         let (sender, receiver) = mpsc::channel::<TestMessage>();
 
-        let channel_handler = TestChannelHandler { receiver };
+        let channel_handler = TestChannelHandler::new(receiver);
         em.register_channel(Box::new(channel_handler));
 
         thread::spawn(move || {
