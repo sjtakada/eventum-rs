@@ -101,17 +101,17 @@ where Self: Send,
 /// Event Manager.
 pub struct EventManager {
 
-    /// Simple events.
-    basic: RefCell<SimpleManager>,
+    /// Simple events poller.
+    basic: RefCell<SimplePoller>,
 
     /// File descriptor (read/write) events.
-    fdesc: RefCell<FdescManager>,
+    fdesc: RefCell<FdescPoller>,
 
     /// Timer events.
-    timer: RefCell<TimerManager>,
+    timer: RefCell<TimerPoller>,
 
     /// Channel events.
-    channel: RefCell<ChannelManager>,
+    channel: RefCell<ChannelPoller>,
 }
 
 impl EventManager {
@@ -119,10 +119,10 @@ impl EventManager {
     /// Constructor.
     pub fn new() -> EventManager {
         EventManager {
-            basic: RefCell::new(SimpleManager::new()),
-            fdesc: RefCell::new(FdescManager::new()),
-            timer: RefCell::new(TimerManager::new()),
-            channel: RefCell::new(ChannelManager::new()),
+            basic: RefCell::new(SimplePoller::new()),
+            fdesc: RefCell::new(FdescPoller::new()),
+            timer: RefCell::new(TimerPoller::new()),
+            channel: RefCell::new(ChannelPoller::new()),
         }
     }
 
@@ -383,7 +383,7 @@ pub fn poll_and_run(manager: &mut EventManager, runner: Box<dyn EventRunner>) {
 
 
 /// Simple manager.
-struct SimpleManager {
+struct SimplePoller {
 
     /// High priority events.
     high: Vec<Arc<dyn EventHandler>>,
@@ -392,10 +392,10 @@ struct SimpleManager {
     low: Vec<Arc<dyn EventHandler>>,
 }
 
-impl SimpleManager {
+impl SimplePoller {
 
-    pub fn new() -> SimpleManager {
-        SimpleManager {
+    pub fn new() -> SimplePoller {
+        SimplePoller {
             high: Vec::new(),
             low: Vec::new(),
         }
@@ -404,7 +404,7 @@ impl SimpleManager {
 
 
 /// File Descriptor manager.
-struct FdescManager {
+struct FdescPoller {
 
     /// Token index.
     index: usize,
@@ -419,10 +419,10 @@ struct FdescManager {
     timeout: Duration,
 }
 
-impl FdescManager {
+impl FdescPoller {
 
-    pub fn new() -> FdescManager {
-        FdescManager {
+    pub fn new() -> FdescPoller {
+        FdescPoller {
             index: 1,	// Reserve 0
             handlers: HashMap::new(),
             poll: Poll::new().unwrap(),
@@ -479,17 +479,17 @@ impl PartialEq for TimerHandler {
 }
 
 /// Timer manager.
-struct TimerManager {
+struct TimerPoller {
 
     /// Ordering handler by expiration time.
     heap: RefCell<BinaryHeap<TimerHandler>>
 }
 
-impl TimerManager {
+impl TimerPoller {
 
     /// Constructor.
-    pub fn new() -> TimerManager {
-        TimerManager {
+    pub fn new() -> TimerPoller {
+        TimerPoller {
             heap: RefCell::new(BinaryHeap::new())
         }
     }
@@ -524,17 +524,17 @@ impl TimerManager {
 
 
 /// Channel manager.
-struct ChannelManager
+struct ChannelPoller
 {
     /// Channel Message Handlers.
     handlers: RefCell<Vec<Box<dyn ChannelHandler>>>,
 }
 
-impl ChannelManager {
+impl ChannelPoller {
 
     /// Constructor.
-    pub fn new() -> ChannelManager {
-        ChannelManager {
+    pub fn new() -> ChannelPoller {
+        ChannelPoller {
             handlers: RefCell::new(Vec::new()),
         }
     }
