@@ -15,7 +15,6 @@ use std::collections::HashMap;
 use std::collections::BinaryHeap;
 use std::cell::RefCell;
 use std::sync::Arc;
-use std::sync::mpsc;
 use std::time::Duration;
 use std::time::Instant;
 use std::cmp::Ordering;
@@ -102,7 +101,7 @@ where Self: Send,
 pub struct EventManager {
 
     /// Simple events poller.
-    basic: RefCell<SimplePoller>,
+    simple: RefCell<SimplePoller>,
 
     /// File descriptor (read/write) events.
     fdesc: RefCell<FdescPoller>,
@@ -119,7 +118,7 @@ impl EventManager {
     /// Constructor.
     pub fn new() -> EventManager {
         EventManager {
-            basic: RefCell::new(SimplePoller::new()),
+            simple: RefCell::new(SimplePoller::new()),
             fdesc: RefCell::new(FdescPoller::new()),
             timer: RefCell::new(TimerPoller::new()),
             channel: RefCell::new(ChannelPoller::new()),
@@ -382,7 +381,7 @@ pub fn poll_and_run(manager: &mut EventManager, runner: Box<dyn EventRunner>) {
 }
 
 
-/// Simple manager.
+/// Simple poller.
 struct SimplePoller {
 
     /// High priority events.
@@ -403,7 +402,7 @@ impl SimplePoller {
 }
 
 
-/// File Descriptor manager.
+/// File Descriptor poller.
 struct FdescPoller {
 
     /// Token index.
@@ -478,7 +477,7 @@ impl PartialEq for TimerHandler {
     }
 }
 
-/// Timer manager.
+/// Timer poller.
 struct TimerPoller {
 
     /// Ordering handler by expiration time.
@@ -523,7 +522,7 @@ impl TimerPoller {
 }
 
 
-/// Channel manager.
+/// Channel poller.
 struct ChannelPoller
 {
     /// Channel Message Handlers.
@@ -574,10 +573,11 @@ mod tests {
     use std::fs::*;
     use std::thread;
     use std::sync::Mutex;
+    use std::sync::mpsc;
 
-    /// 
-    /// 
-    ///
+    /// File Descriptor event test.
+    ///  Create a UNIX domain socket server and listen, and connect to the socket
+    ///  from another thread, and the server accept it.
 
     struct TestListener {
         accept: Mutex<bool>,
@@ -625,10 +625,14 @@ mod tests {
 
         let runner = SimpleRunner::new();
         let events = em.poll();
-        let result = runner.run(events);
+        runner.run(events).unwrap();
 
         assert_eq!(*eh.accept.lock().unwrap(), true);
     }
+
+    /// Timer event test.
+    ///  Set 1 second timer and check the value before and after the timer
+    ///  is expired.
 
     struct TimerEntry {
         done: Mutex<bool>,
@@ -682,10 +686,13 @@ mod tests {
         assert_eq!(tc.done(), true);
     }
 
+    /// Channel event test.
+    ///
+    ///
 
-    pub struct TestMessage {
-        a: i32,
-        b: String,
+    pub enum TestMessage {
+        Number(i32),
+        Desc(String)
     }
 
     pub struct TestChannelHandler {
@@ -727,14 +734,32 @@ mod tests {
 
         /// Handle event.
         fn handle(&self, event_type: EventType) -> Result<(), EventError> {
+            match event_type {
+                EventType::ChannelEvent => {
+                }
+                _ => {
+                }
+            }
 
             Ok(())
         }
     }
 
-
     #[test]
     pub fn test_channel_event() {
+        let em = EventManager::new();
+        let runner = SimpleRunner::new();
 
+        let (sender, receiver) = mpsc::channel::<TestMessage>();
+
+        let channel_handler = TestChannelHandler { receiver };
+        em.register_channel(Box::new(channel_handler));
+
+        thread::spawn(move || {
+            sender.send(TestMessage::Number(100)).unwrap();
+        });
+
+        let events = em.poll();
+        runner.run(events).unwrap();
     }
 }
