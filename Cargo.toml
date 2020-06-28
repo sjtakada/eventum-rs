@@ -1,5 +1,5 @@
 [package]
-name = "eventum-rs"
+name = "eventum"
 version = "0.1.0"
 authors = ["Toshiaki Takada <toshi@reze.rs>"]
 edition = "2018"
