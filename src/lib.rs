@@ -8,21 +8,19 @@
 //  Channel events
 //
 
-
-use std::thread;
-use std::fmt;
-use std::collections::HashMap;
-use std::collections::BinaryHeap;
 use std::cell::RefCell;
+use std::cmp::Ordering;
+use std::collections::BinaryHeap;
+use std::collections::HashMap;
+use std::fmt;
 use std::sync::Arc;
+use std::thread;
 use std::time::Duration;
 use std::time::Instant;
-use std::cmp::Ordering;
 
-use mio::*;
-use mio::event::*;
-use log::error;
 use log::debug;
+use mio::event::*;
+use mio::*;
 use quick_error::*;
 
 pub const EVENT_MANAGER_TICK: u64 = 10;
@@ -45,7 +43,6 @@ quick_error! {
     }
 }
 
-
 /// Event types.
 pub enum EventType {
     SimpleEvent,
@@ -57,7 +54,6 @@ pub enum EventType {
 }
 
 impl EventType {
-
     pub fn to_string(&self) -> &str {
         match *self {
             EventType::SimpleEvent => "Simple Event",
@@ -79,8 +75,9 @@ impl fmt::Debug for EventType {
 /// Event Handler trait.
 /// Token is associated with EventHandler and certain event expected.
 pub trait EventHandler
-where Self: Send,
-      Self: Sync
+where
+    Self: Send,
+    Self: Sync,
 {
     /// Handle event.
     fn handle(&self, event_type: EventType) -> Result<(), EventError>;
@@ -99,7 +96,6 @@ where Self: Send,
 
 /// Event Manager.
 pub struct EventManager {
-
     /// Simple events poller.
     simple: RefCell<SimplePoller>,
 
@@ -114,7 +110,6 @@ pub struct EventManager {
 }
 
 impl EventManager {
-
     /// Constructor.
     pub fn new() -> EventManager {
         EventManager {
@@ -138,18 +133,29 @@ impl EventManager {
     /// Poll low priority events.
     pub fn poll_low(&self) -> Vec<(EventType, Arc<dyn EventHandler>)> {
         let mut simple = self.simple.borrow_mut();
-        simple.low.drain(..).map(|h| (EventType::SimpleEvent, h)).collect()
+        simple
+            .low
+            .drain(..)
+            .map(|h| (EventType::SimpleEvent, h))
+            .collect()
     }
 
     /// Poll high priority events.
     pub fn poll_high(&self) -> Vec<(EventType, Arc<dyn EventHandler>)> {
         let mut simple = self.simple.borrow_mut();
-        simple.high.drain(..).map(|h| (EventType::SimpleEvent, h)).collect()
+        simple
+            .high
+            .drain(..)
+            .map(|h| (EventType::SimpleEvent, h))
+            .collect()
     }
 
     /// Register listen socket.
-    pub fn register_listen(&self, fd: &mut dyn Source, handler: Arc<dyn EventHandler>)
-                           -> Result<(), EventError> {
+    pub fn register_listen(
+        &self,
+        fd: &mut dyn Source,
+        handler: Arc<dyn EventHandler>,
+    ) -> Result<(), EventError> {
         let mut fdesc = self.fdesc.borrow_mut();
         let index = fdesc.index;
         let token = Token(index);
@@ -159,10 +165,11 @@ impl EventManager {
         // TODO: consider index wrap around?
         fdesc.index += 1;
 
-        if let Err(_) = fdesc.poll.registry().register(
-            fd,
-            token,
-            Interest::READABLE) {
+        if let Err(_) = fdesc
+            .poll
+            .registry()
+            .register(fd, token, Interest::READABLE)
+        {
             Err(EventError::RegistryError)
         } else {
             Ok(())
@@ -170,8 +177,11 @@ impl EventManager {
     }
 
     /// Register read socket.
-    pub fn register_read(&self, fd: &mut dyn Source, handler: Arc<dyn EventHandler>)
-                         -> Result<(), EventError> {
+    pub fn register_read(
+        &self,
+        fd: &mut dyn Source,
+        handler: Arc<dyn EventHandler>,
+    ) -> Result<(), EventError> {
         let mut fdesc = self.fdesc.borrow_mut();
         let index = fdesc.index;
         let token = Token(index);
@@ -183,10 +193,11 @@ impl EventManager {
         // TODO: consider index wrap around?
         fdesc.index += 1;
 
-        if let Err(_) = fdesc.poll.registry().register(
-            fd,
-            token,
-            Interest::READABLE) {
+        if let Err(_) = fdesc
+            .poll
+            .registry()
+            .register(fd, token, Interest::READABLE)
+        {
             Err(EventError::RegistryError)
         } else {
             Ok(())
@@ -194,8 +205,11 @@ impl EventManager {
     }
 
     /// Register write socket.
-    pub fn register_write(&self, fd: &mut dyn Source, handler: Arc<dyn EventHandler>)
-                          -> Result<(), EventError> {
+    pub fn register_write(
+        &self,
+        fd: &mut dyn Source,
+        handler: Arc<dyn EventHandler>,
+    ) -> Result<(), EventError> {
         let mut fdesc = self.fdesc.borrow_mut();
         let index = fdesc.index;
         let token = Token(index);
@@ -207,10 +221,11 @@ impl EventManager {
         // TODO: consider index wrap around?
         fdesc.index += 1;
 
-        if let Err(_) = fdesc.poll.registry().register(
-            fd,
-            token,
-            Interest::WRITABLE) {
+        if let Err(_) = fdesc
+            .poll
+            .registry()
+            .register(fd, token, Interest::WRITABLE)
+        {
             Err(EventError::RegistryError)
         } else {
             Ok(())
@@ -232,7 +247,7 @@ impl EventManager {
         let timeout = fdesc.timeout;
 
         match fdesc.poll.poll(&mut events, Some(timeout)) {
-            Ok(_) => {},
+            Ok(_) => {}
             Err(_) => {}
         }
 
@@ -300,7 +315,7 @@ impl EventManager {
     /// To dispatch and do handling depends on a runner.
     pub fn poll(&self) -> Vec<(EventType, Arc<dyn EventHandler>)> {
         let mut vec = Vec::new();
-        
+
         // High priority events.
         vec.append(&mut self.poll_high());
 
@@ -349,23 +364,17 @@ pub fn wait_until_writable(fd: &mut dyn Source) -> Result<(), EventError> {
 
 /// Trait EventRunner.
 pub trait EventRunner {
-
     /// Run events.
     fn run(&self, events: Vec<(EventType, Arc<dyn EventHandler>)>) -> Result<(), EventError>;
 }
 
-
 /// Default event runner
-pub struct SimpleRunner {
-
-}
+pub struct SimpleRunner {}
 
 impl SimpleRunner {
-
     /// Constructor.
     pub fn new() -> SimpleRunner {
-        SimpleRunner {
-        }
+        SimpleRunner {}
     }
 
     /// Sleep certain period to have other events to occur.
@@ -376,7 +385,6 @@ impl SimpleRunner {
 }
 
 impl EventRunner for SimpleRunner {
-
     /// Run events, return last event error.
     fn run(&self, events: Vec<(EventType, Arc<dyn EventHandler>)>) -> Result<(), EventError> {
         let mut result = Ok(());
@@ -392,7 +400,6 @@ impl EventRunner for SimpleRunner {
 
 /// Helper.
 pub fn poll_and_run(manager: &mut EventManager, runner: Box<dyn EventRunner>) {
-
     loop {
         let events = manager.poll();
         let result = runner.run(events);
@@ -404,10 +411,8 @@ pub fn poll_and_run(manager: &mut EventManager, runner: Box<dyn EventRunner>) {
     }
 }
 
-
 /// Simple poller.
 struct SimplePoller {
-
     /// High priority events.
     high: Vec<Arc<dyn EventHandler>>,
 
@@ -416,7 +421,6 @@ struct SimplePoller {
 }
 
 impl SimplePoller {
-
     pub fn new() -> SimplePoller {
         SimplePoller {
             high: Vec::new(),
@@ -424,19 +428,17 @@ impl SimplePoller {
         }
     }
 
-    pub fn register_low(&mut self, handler: Arc<dyn EventHandler>, ) {
+    pub fn register_low(&mut self, handler: Arc<dyn EventHandler>) {
         self.low.push(handler);
     }
 
-    pub fn register_high(&mut self, handler: Arc<dyn EventHandler>, ) {
+    pub fn register_high(&mut self, handler: Arc<dyn EventHandler>) {
         self.high.push(handler);
     }
 }
 
-
 /// File Descriptor poller.
 struct FdescPoller {
-
     /// Token index.
     index: usize,
 
@@ -451,10 +453,9 @@ struct FdescPoller {
 }
 
 impl FdescPoller {
-
     pub fn new() -> FdescPoller {
         FdescPoller {
-            index: 1,	// Reserve 0
+            index: 1, // Reserve 0
             handlers: HashMap::new(),
             poll: Poll::new().unwrap(),
             timeout: Duration::from_millis(EVENT_MANAGER_TICK),
@@ -464,7 +465,6 @@ impl FdescPoller {
 
 /// TimerHandler trait.
 pub struct TimerHandler {
-
     /// Expiration time.
     exp: Instant,
 
@@ -473,7 +473,6 @@ pub struct TimerHandler {
 }
 
 impl TimerHandler {
-
     /// Constructor.
     pub fn new(d: Duration, handler: Arc<dyn EventHandler>) -> TimerHandler {
         TimerHandler {
@@ -490,18 +489,17 @@ impl TimerHandler {
 
 impl Ord for TimerHandler {
     fn cmp(&self, other: &Self) -> Ordering {
-	other.expiration().cmp(&self.expiration())
+        other.expiration().cmp(&self.expiration())
     }
 }
 
 impl PartialOrd for TimerHandler {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-	Some(self.cmp(other))
+        Some(self.cmp(other))
     }
 }
 
-impl Eq for TimerHandler {
-}
+impl Eq for TimerHandler {}
 
 impl PartialEq for TimerHandler {
     fn eq(&self, other: &Self) -> bool {
@@ -511,17 +509,15 @@ impl PartialEq for TimerHandler {
 
 /// Timer poller.
 struct TimerPoller {
-
     /// Ordering handler by expiration time.
-    heap: RefCell<BinaryHeap<TimerHandler>>
+    heap: RefCell<BinaryHeap<TimerHandler>>,
 }
 
 impl TimerPoller {
-
     /// Constructor.
     pub fn new() -> TimerPoller {
         TimerPoller {
-            heap: RefCell::new(BinaryHeap::new())
+            heap: RefCell::new(BinaryHeap::new()),
         }
     }
 
@@ -553,16 +549,13 @@ impl TimerPoller {
     }
 }
 
-
 /// Channel poller.
-struct ChannelPoller
-{
+struct ChannelPoller {
     /// Channel Message Handlers.
     handlers: RefCell<Vec<Box<dyn ChannelHandler>>>,
 }
 
 impl ChannelPoller {
-
     /// Constructor.
     pub fn new() -> ChannelPoller {
         ChannelPoller {
@@ -591,7 +584,6 @@ impl ChannelPoller {
 
 /// Channel Handler trait.
 pub trait ChannelHandler {
-
     /// Poll channel.
     fn poll_channel(&self) -> Vec<(EventType, Arc<dyn EventHandler>)>;
 }
@@ -601,11 +593,11 @@ mod tests {
     use super::*;
     use mio::net::UnixListener;
     use mio::net::UnixStream;
-    use std::path::Path;
     use std::fs::*;
-    use std::thread;
-    use std::sync::Mutex;
+    use std::path::Path;
     use std::sync::mpsc;
+    use std::sync::Mutex;
+    use std::thread;
 
     /// Simple event test.
     struct TestState {
@@ -614,9 +606,7 @@ mod tests {
 
     impl TestState {
         pub fn new() -> TestState {
-            TestState {
-                vec: Vec::new(),
-            }
+            TestState { vec: Vec::new() }
         }
     }
 
@@ -648,8 +638,14 @@ mod tests {
         let em = EventManager::new();
         let state = Arc::new(Mutex::new(TestState::new()));
 
-        let handler1 = TestHandler { state: state.clone(), priority: 100 };
-        let handler2 = TestHandler { state: state.clone(), priority: 200 };
+        let handler1 = TestHandler {
+            state: state.clone(),
+            priority: 100,
+        };
+        let handler2 = TestHandler {
+            state: state.clone(),
+            priority: 200,
+        };
 
         em.register_low(Arc::new(handler1));
         em.register_high(Arc::new(handler2));
@@ -663,7 +659,6 @@ mod tests {
         assert_eq!(state.vec[0], 200);
         assert_eq!(state.vec[1], 100);
     }
-
 
     /// File Descriptor event test.
     ///  Create a UNIX domain socket server and listen, and connect to the socket
@@ -696,7 +691,9 @@ mod tests {
 
         let em = EventManager::new();
         let mut listener = UnixListener::bind(path).unwrap();
-        let eh = Arc::new(TestListener { accept: Mutex::new(false) });
+        let eh = Arc::new(TestListener {
+            accept: Mutex::new(false),
+        });
 
         em.register_listen(&mut listener, eh.clone()).unwrap();
 
@@ -782,7 +779,7 @@ mod tests {
 
     pub enum TestMessage {
         Number(i32),
-        Desc(String)
+        Desc(String),
     }
 
     pub struct TestMessageState {
@@ -805,8 +802,10 @@ mod tests {
     }
 
     impl TestChannelHandler {
-        pub fn new(receiver: mpsc::Receiver<TestMessage>,
-                   state: Arc<Mutex<TestMessageState>>) -> TestChannelHandler {
+        pub fn new(
+            receiver: mpsc::Receiver<TestMessage>,
+            state: Arc<Mutex<TestMessageState>>,
+        ) -> TestChannelHandler {
             TestChannelHandler {
                 receiver: receiver,
                 state: state,
@@ -815,7 +814,6 @@ mod tests {
     }
 
     impl ChannelHandler for TestChannelHandler {
-
         /// Poll channel.
         fn poll_channel(&self) -> Vec<(EventType, Arc<dyn EventHandler>)> {
             let mut vec = Vec::new();
@@ -836,7 +834,10 @@ mod tests {
     }
 
     impl TestMessageHandler {
-        pub fn new(message: TestMessage, state: Arc<Mutex<TestMessageState>>) -> Arc<dyn EventHandler> {
+        pub fn new(
+            message: TestMessage,
+            state: Arc<Mutex<TestMessageState>>,
+        ) -> Arc<dyn EventHandler> {
             Arc::new(TestMessageHandler {
                 message: message,
                 state: state,
@@ -854,14 +855,14 @@ mod tests {
                         let mut state = state.lock().unwrap();
 
                         (*state).number.replace(*i);
-                    },
+                    }
                     TestMessage::Desc(s) => {
                         let state = self.state.clone();
                         let mut state = state.lock().unwrap();
 
                         (*state).desc.replace(s.clone());
-                    }                       
-                }
+                    }
+                },
                 _ => assert!(false),
             }
 

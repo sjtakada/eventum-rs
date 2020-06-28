@@ -3,6 +3,12 @@ name = "eventum-rs"
 version = "0.1.0"
 authors = ["Toshiaki Takada <toshi@reze.rs>"]
 edition = "2018"
+description = "Asynchronous I/O Event manager"
+repository = "https://github.com/sjtakada/eventum-rs"
+readme = "README.md"
+keywords = ["async", "io"]
+license = "Apache-2.0"
+categories = ["network-programming", "asynchronous"]
 
 [dependencies]
 quick-error = "1.2.3"
