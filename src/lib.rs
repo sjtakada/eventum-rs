@@ -3,6 +3,7 @@
 //   Copyright (C) 2020 Toshiaki Takada
 //
 // Event machine
+//  Simple events
 //  File Descriptor events
 //  Timer events
 //  Channel events
@@ -28,13 +29,45 @@ pub const EVENT_MANAGER_TICK: u64 = 10;
 quick_error! {
     #[derive(Debug)]
     pub enum EventError {
+        InvalidEvent {
+            description("Invalid event")
+            display(r#"Invalid event"#)
+        }
         RegistryError {
             description("Registry error")
             display(r#"Registry error"#)
         }
-        ChannelQueueEmpty {
-            description("Channel queue is empty")
-            display(r#"Channel queue is empty"#)
+        PollError {
+            description("Poll error")
+            display(r#"Poll error"#)
+        }
+        NotReadable {
+            description("Not readable")
+            display(r#"Not readable"#)
+        }
+        NotWritable {
+            description("Not writable")
+            display(r#"Not writable"#)
+        }
+        ConnectError(s: String) {
+            description("Connect error")
+            display(r#"Connect error {}"#, s)
+        }
+        ReadError(s: String) {
+            description("Read Error")
+            display(r#"Read Error {}"#, s)
+        }
+        WriteError(s: String) {
+            description("Write error")
+            display(r#"Write error {}"#, s)
+        }
+        NoStream {
+            description("No stream")
+            display(r#"No stream"#)
+        }
+        ChannelError(s: String) {
+            description("Channel error")
+            display(r#"Channel error {}"#, s)
         }
         SystemShutdown {
             description("System shutdown")
@@ -176,12 +209,46 @@ impl EventManager {
         }
     }
 
+    /// Register read/write socket.
+    ///  Typically socket is bidirectional.
+    pub fn register_read_write(
+        &self,
+        fd: &mut dyn Source,
+        handler: Arc<dyn EventHandler>,
+    ) -> Result<(), EventError> {
+        debug!("register_read_write");
+
+        let mut fdesc = self.fdesc.borrow_mut();
+        let index = fdesc.index;
+        let token = Token(index);
+
+        handler.set_token(token);
+
+        fdesc.handlers.insert(token, handler);
+
+        // TODO: consider index wrap around?
+        fdesc.index += 1;
+
+        if let Err(_) =
+            fdesc
+                .poll
+                .registry()
+                .register(fd, token, Interest::READABLE | Interest::WRITABLE)
+        {
+            Err(EventError::RegistryError)
+        } else {
+            Ok(())
+        }
+    }
+
     /// Register read socket.
     pub fn register_read(
         &self,
         fd: &mut dyn Source,
         handler: Arc<dyn EventHandler>,
     ) -> Result<(), EventError> {
+        debug!("register_read");
+
         let mut fdesc = self.fdesc.borrow_mut();
         let index = fdesc.index;
         let token = Token(index);
@@ -210,6 +277,8 @@ impl EventManager {
         fd: &mut dyn Source,
         handler: Arc<dyn EventHandler>,
     ) -> Result<(), EventError> {
+        debug!("register_write");
+
         let mut fdesc = self.fdesc.borrow_mut();
         let index = fdesc.index;
         let token = Token(index);
@@ -246,10 +315,7 @@ impl EventManager {
         let mut events = Events::with_capacity(1024);
         let timeout = fdesc.timeout;
 
-        match fdesc.poll.poll(&mut events, Some(timeout)) {
-            Ok(_) => {}
-            Err(_) => {}
-        }
+        fdesc.poll.poll(&mut events, Some(timeout)).unwrap();
 
         events
     }
@@ -285,6 +351,8 @@ impl EventManager {
 
     /// Register timer.
     pub fn register_timer(&self, d: Duration, handler: Arc<dyn EventHandler>) {
+        debug!("register_timer");
+
         let timers = self.timer.borrow();
         timers.register(d, handler);
     }
@@ -303,6 +371,8 @@ impl EventManager {
 
     /// Register channel handler.
     pub fn register_channel(&self, handler: Box<dyn ChannelHandler>) {
+        debug!("register_channel");
+
         self.channel.borrow_mut().register_handler(handler);
     }
 
@@ -333,32 +403,6 @@ impl EventManager {
 
         // Return events vector.
         vec
-    }
-}
-
-/// Utility to blocking until fd gets readable.
-pub fn wait_until_readable(fd: &mut dyn Source) -> Result<(), EventError> {
-    let mut poll = Poll::new().unwrap();
-
-    if let Err(_) = poll.registry().register(fd, Token(0), Interest::READABLE) {
-        Err(EventError::RegistryError)
-    } else {
-        let mut events = Events::with_capacity(1024);
-        let _ = poll.poll(&mut events, None);
-        Ok(())
-    }
-}
-
-/// Utility to blocking until fd gets writable.
-pub fn wait_until_writable(fd: &mut dyn Source) -> Result<(), EventError> {
-    let mut poll = Poll::new().unwrap();
-
-    if let Err(_) = poll.registry().register(fd, Token(0), Interest::WRITABLE) {
-        Err(EventError::RegistryError)
-    } else {
-        let mut events = Events::with_capacity(1024);
-        let _ = poll.poll(&mut events, None);
-        Ok(())
     }
 }
 
@@ -673,7 +717,7 @@ mod tests {
             match event_type {
                 EventType::ReadEvent => {
                     *self.accept.lock().unwrap() = true;
-                    println!("Listener got a connection");
+                    debug!("Listener got a connection");
                 }
                 _ => {
                     assert!(false);
@@ -700,10 +744,10 @@ mod tests {
         let _ = thread::spawn(move || {
             match UnixStream::connect(&path) {
                 Ok(_stream) => {
-                    println!("Stream");
+                    debug!("Stream");
                 }
                 Err(_) => {
-                    println!("Connect error");
+                    error!("Connect error");
                 }
             }
 
