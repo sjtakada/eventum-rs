@@ -9,6 +9,7 @@ use std::time::Duration;
 use std::time::Instant;
 
 use log::debug;
+use log::error;
 use mio::event::*;
 use mio::*;
 use quick_error::*;

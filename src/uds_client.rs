@@ -5,22 +5,21 @@
 // Unix Domain Socket Client.
 //
 
+use std::cell::RefCell;
 use std::io::Read;
 use std::io::Write;
-use std::sync::Arc;
-use std::cell::RefCell;
 use std::path::PathBuf;
-use std::time::Duration;
+use std::sync::Arc;
 use std::sync::Mutex;
+use std::time::Duration;
 
+use log::debug;
 use mio::net::UnixStream;
 
 use super::core::*;
 
-
 /// Trait UdsClient handler.
 pub trait UdsClientHandler {
-
     /// callback when client connects to server.
     fn handle_connect(&self, entry: &UdsClient) -> Result<(), EventError>;
 
@@ -36,14 +35,12 @@ unsafe impl Sync for UdsClient {}
 
 /// Unix Domain Socket client entry, created per connect.
 pub struct UdsClient {
-
     /// UdsClient Inner.
     inner: RefCell<Option<Arc<UdsClientInner>>>,
 }
 
 /// UdsClient implementation.
 impl UdsClient {
-
     /// Constructor.
     pub fn new() -> UdsClient {
         UdsClient {
@@ -51,10 +48,15 @@ impl UdsClient {
         }
     }
 
+    /// Release inner.
+    pub fn release(&self) {
+        self.inner.replace(None);
+    }
+
     /// Return UdsClientInner.
     pub fn get_inner(&self) -> Arc<UdsClientInner> {
         if let Some(ref mut inner) = *self.inner.borrow_mut() {
-            return inner.clone()
+            return inner.clone();
         }
 
         // should not happen.
@@ -62,12 +64,18 @@ impl UdsClient {
     }
 
     /// Start UdsClient.
-    pub fn start(event_manager: Arc<Mutex<EventManager>>,
-                 handler: Arc<dyn UdsClientHandler>, path: &PathBuf) -> Arc<UdsClient> {
-
+    pub fn start(
+        event_manager: Arc<Mutex<EventManager>>,
+        handler: Arc<dyn UdsClientHandler>,
+        path: &PathBuf,
+    ) -> Arc<UdsClient> {
         let client = Arc::new(UdsClient::new());
-        let inner = Arc::new(UdsClientInner::new(client.clone(), event_manager.clone(),
-                                                 handler.clone(), path));
+        let inner = Arc::new(UdsClientInner::new(
+            client.clone(),
+            event_manager.clone(),
+            handler.clone(),
+            path,
+        ));
 
         client.inner.borrow_mut().replace(inner);
         client
@@ -81,7 +89,7 @@ impl UdsClient {
         match inner.connect() {
             Ok(_) => {
                 if let Some(ref mut stream) = *inner.stream.borrow_mut() {
-                    if let Err(_)  = event_manager
+                    if let Err(_) = event_manager
                         .lock()
                         .unwrap()
                         .register_read_write(stream, inner.clone())
@@ -89,7 +97,7 @@ impl UdsClient {
                         self.connect_timer();
                     }
                 }
-            },
+            }
             Err(_) => self.connect_timer(),
         }
     }
@@ -116,15 +124,23 @@ impl UdsClient {
     }
 }
 
+impl Drop for UdsClient {
+    fn drop(&mut self) {
+        println!("Drop UdsClient");
+
+        let inner = self.inner.replace(None);
+        drop(inner);
+    }
+}
+
 unsafe impl Send for UdsClientInner {}
 unsafe impl Sync for UdsClientInner {}
 
 /// UdsClient Inner.
 pub struct UdsClientInner {
-
     /// Server path.
     path: PathBuf,
-    
+
     /// UdsClient.
     client: RefCell<Arc<UdsClient>>,
 
@@ -140,11 +156,13 @@ pub struct UdsClientInner {
 
 /// UdsClientInner implementation.
 impl UdsClientInner {
-
     /// Constructdor.
-    pub fn new(client: Arc<UdsClient>, event_manager: Arc<Mutex<EventManager>>,
-               handler: Arc<dyn UdsClientHandler>, path: &PathBuf)
-               -> UdsClientInner {
+    pub fn new(
+        client: Arc<UdsClient>,
+        event_manager: Arc<Mutex<EventManager>>,
+        handler: Arc<dyn UdsClientHandler>,
+        path: &PathBuf,
+    ) -> UdsClientInner {
         UdsClientInner {
             path: path.clone(),
             client: RefCell::new(client),
@@ -163,10 +181,8 @@ impl UdsClientInner {
                 self.stream.borrow_mut().replace(stream);
                 let _ = self.handler.borrow_mut().handle_connect(&client);
                 Ok(())
-            },
-            Err(_) => {
-                Err(EventError::ConnectError("UDS".to_string()))
             }
+            Err(_) => Err(EventError::ConnectError("UDS".to_string())),
         }
     }
 
@@ -180,12 +196,10 @@ impl UdsClientInner {
         match *self.stream.borrow_mut() {
             Some(ref mut stream) => {
                 if let Err(_err) = stream.write_all(message.as_bytes()) {
-                    return Err(EventError::WriteError("UDS".to_string()))
+                    return Err(EventError::WriteError("UDS".to_string()));
                 }
-            },
-            None => {
-                return Err(EventError::WriteError("UDS".to_string()))
             }
+            None => return Err(EventError::WriteError("UDS".to_string())),
         }
 
         Ok(())
@@ -200,7 +214,7 @@ impl UdsClientInner {
 
                 if let Err(err) = stream.read_to_end(&mut buffer) {
                     if err.kind() != std::io::ErrorKind::WouldBlock {
-                        return Err(EventError::ReadError(err.to_string()))
+                        return Err(EventError::ReadError(err.to_string()));
                     }
                 }
 
@@ -209,19 +223,24 @@ impl UdsClientInner {
                     let message = String::from(str);
                     Ok(message)
                 } else {
-                    Err(EventError::ReadError("Empty string from stream".to_string()))
+                    Err(EventError::ReadError(
+                        "Empty string from stream".to_string(),
+                    ))
                 }
-            },
-            None => {
-                Err(EventError::NoStream)
             }
+            None => Err(EventError::NoStream),
         }
+    }
+}
+
+impl Drop for UdsClientInner {
+    fn drop(&mut self) {
+        println!("Drop UdsClientInner");
     }
 }
 
 /// EventHandler implementation for UdsClient.
 impl EventHandler for UdsClientInner {
-
     /// Handle event.
     fn handle(&self, e: EventType) -> Result<(), EventError> {
         match e {
@@ -231,7 +250,7 @@ impl EventHandler for UdsClientInner {
                 client.connect();
 
                 Ok(())
-            },
+            }
             EventType::ReadEvent => {
                 let handler = self.handler.borrow_mut();
                 let client = self.client.borrow();
@@ -244,7 +263,7 @@ impl EventHandler for UdsClientInner {
                 }
 
                 Ok(())
-            },
+            }
             EventType::ErrorEvent => {
                 self.stream.borrow_mut().take();
 
@@ -256,10 +275,48 @@ impl EventHandler for UdsClientInner {
 
                 // Dispatch message to Client message handler.
                 handler.handle_disconnect(&client)
-            },
-            _ => {
-                Err(EventError::InvalidEvent)
             }
+            _ => Err(EventError::InvalidEvent),
+        }
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    struct TestClientHandler {
+    }
+
+    impl UdsClientHandler for TestClientHandler {
+        /// callback when client connects to server.
+        fn handle_connect(&self, entry: &UdsClient) -> Result<(), EventError> {
+            Ok(())
+        }
+
+        /// callback when client detects server disconnected.
+        fn handle_disconnect(&self, entry: &UdsClient) -> Result<(), EventError> {
+            Ok(())
+        }
+
+        /// callback when client received message.
+        fn handle_message(&self, entry: &UdsClient) -> Result<(), EventError> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    pub fn test_uds_client() {
+        let mut path = PathBuf::new();
+        path.push("/tmp/test_uds.sock");
+        let em = EventManager::new();
+        let handler = TestClientHandler { };
+        {
+            let uds_client = UdsClient::start(Arc::new(Mutex::new(em)),
+                                              Arc::new(handler), &path);
+            drop(uds_client);
         }
     }
 }
