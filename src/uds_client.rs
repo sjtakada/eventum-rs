@@ -68,8 +68,8 @@ impl UdsClient {
         event_manager: Arc<Mutex<EventManager>>,
         handler: Arc<dyn UdsClientHandler>,
         path: &PathBuf,
-    ) -> Arc<UdsClient> {
-        let client = Arc::new(UdsClient::new());
+    ) -> Arc<Mutex<UdsClient>> {
+        let client = Arc::new(Mutex::new(UdsClient::new()));
         let inner = Arc::new(UdsClientInner::new(
             client.clone(),
             event_manager.clone(),
@@ -77,7 +77,7 @@ impl UdsClient {
             path,
         ));
 
-        client.inner.borrow_mut().replace(inner);
+        client.lock().unwrap().inner.borrow_mut().replace(inner);
         client
     }
 
@@ -142,7 +142,7 @@ pub struct UdsClientInner {
     path: PathBuf,
 
     /// UdsClient.
-    client: RefCell<Arc<UdsClient>>,
+    client: Arc<Mutex<UdsClient>>,
 
     /// Event manager.
     event_manager: Arc<Mutex<EventManager>>,
@@ -158,14 +158,14 @@ pub struct UdsClientInner {
 impl UdsClientInner {
     /// Constructdor.
     pub fn new(
-        client: Arc<UdsClient>,
+        client: Arc<Mutex<UdsClient>>,
         event_manager: Arc<Mutex<EventManager>>,
         handler: Arc<dyn UdsClientHandler>,
         path: &PathBuf,
     ) -> UdsClientInner {
         UdsClientInner {
             path: path.clone(),
-            client: RefCell::new(client),
+            client: client,
             event_manager: event_manager,
             handler: RefCell::new(handler),
             stream: RefCell::new(None),
@@ -174,12 +174,12 @@ impl UdsClientInner {
 
     /// Connect to server.
     pub fn connect(&self) -> Result<(), EventError> {
-        let client = self.client.borrow_mut();
+        let client = self.client.lock().unwrap();
 
         match UnixStream::connect(&self.path) {
             Ok(stream) => {
                 self.stream.borrow_mut().replace(stream);
-                let _ = self.handler.borrow_mut().handle_connect(&client);
+                let _ = self.handler.borrow_mut().handle_connect(&*client);
                 Ok(())
             }
             Err(_) => Err(EventError::ConnectError("UDS".to_string())),
@@ -246,17 +246,17 @@ impl EventHandler for UdsClientInner {
         match e {
             EventType::TimerEvent => {
                 // Reconnect timer expired.
-                let client = self.client.borrow_mut().clone();
+                let client = self.client.lock().unwrap();
                 client.connect();
 
                 Ok(())
             }
             EventType::ReadEvent => {
                 let handler = self.handler.borrow_mut();
-                let client = self.client.borrow();
+                let client = self.client.lock().unwrap();
 
                 // Dispatch message to message handler.
-                if let Err(_) = handler.handle_message(&client) {
+                if let Err(_) = handler.handle_message(&*client) {
                     // If read causes an error, most likely server disconnected,
                     // so schedule reconnect.
                     client.connect_timer();
@@ -268,13 +268,13 @@ impl EventHandler for UdsClientInner {
                 self.stream.borrow_mut().take();
 
                 // TODO: Schedule reconnect timer.
-                let client = self.client.borrow();
+                let client = self.client.lock().unwrap();
                 client.connect_timer();
 
                 let handler = self.handler.borrow_mut();
 
                 // Dispatch message to Client message handler.
-                handler.handle_disconnect(&client)
+                handler.handle_disconnect(&*client)
             }
             _ => Err(EventError::InvalidEvent),
         }
