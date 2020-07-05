@@ -86,7 +86,7 @@ impl UdsClient {
         let inner = self.get_inner();
         let event_manager = inner.get_event_manager();
 
-        match inner.connect() {
+        match inner.connect(self) {
             Ok(_) => {
                 if let Some(ref mut stream) = *inner.stream.borrow_mut() {
                     if let Err(_) = event_manager
@@ -173,13 +173,11 @@ impl UdsClientInner {
     }
 
     /// Connect to server.
-    pub fn connect(&self) -> Result<(), EventError> {
-        let client = self.client.lock().unwrap();
-
+    pub fn connect(&self, client: &UdsClient) -> Result<(), EventError> {
         match UnixStream::connect(&self.path) {
             Ok(stream) => {
                 self.stream.borrow_mut().replace(stream);
-                let _ = self.handler.borrow_mut().handle_connect(&*client);
+                let _ = self.handler.borrow_mut().handle_connect(client);
                 Ok(())
             }
             Err(_) => Err(EventError::ConnectError("UDS".to_string())),
@@ -292,17 +290,17 @@ mod tests {
 
     impl UdsClientHandler for TestClientHandler {
         /// callback when client connects to server.
-        fn handle_connect(&self, entry: &UdsClient) -> Result<(), EventError> {
+        fn handle_connect(&self, _entry: &UdsClient) -> Result<(), EventError> {
             Ok(())
         }
 
         /// callback when client detects server disconnected.
-        fn handle_disconnect(&self, entry: &UdsClient) -> Result<(), EventError> {
+        fn handle_disconnect(&self, _entry: &UdsClient) -> Result<(), EventError> {
             Ok(())
         }
 
         /// callback when client received message.
-        fn handle_message(&self, entry: &UdsClient) -> Result<(), EventError> {
+        fn handle_message(&self, _entry: &UdsClient) -> Result<(), EventError> {
             Ok(())
         }
     }
