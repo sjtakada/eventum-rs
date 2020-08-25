@@ -131,6 +131,12 @@ pub struct EventManager {
     channel: RefCell<ChannelPoller>,
 }
 
+impl Drop for EventManager {
+    fn drop(&mut self) {
+        println!("Drop EventManager");
+    }
+}
+
 impl EventManager {
     /// Constructor.
     pub fn new() -> EventManager {
@@ -140,6 +146,14 @@ impl EventManager {
             timer: RefCell::new(TimerPoller::new()),
             channel: RefCell::new(ChannelPoller::new()),
         }
+    }
+
+    /// Release all resources.
+    pub fn shutdown(&self) {
+        self.simple.borrow_mut().release();
+        self.fdesc.borrow_mut().release();
+        self.timer.borrow_mut().release();
+        self.channel.borrow_mut().release();
     }
 
     /// Register a low priority event.
@@ -461,6 +475,11 @@ impl SimplePoller {
         }
     }
 
+    pub fn release(&mut self) {
+        self.high.drain(..);
+        self.low.drain(..);
+    }
+
     pub fn register_low(&mut self, handler: Arc<dyn EventHandler>) {
         self.low.push(handler);
     }
@@ -493,6 +512,10 @@ impl FdescPoller {
             poll: Poll::new().unwrap(),
             timeout: Duration::from_millis(EVENT_MANAGER_TICK),
         }
+    }
+
+    pub fn release(&mut self) {
+        self.handlers.drain();
     }
 }
 
@@ -554,6 +577,10 @@ impl TimerPoller {
         }
     }
 
+    pub fn release(&mut self) {
+        self.heap.borrow_mut().drain();
+    }
+
     /// Register timer handler.
     pub fn register(&self, d: Duration, handler: Arc<dyn EventHandler>) {
         let timer_handler = TimerHandler::new(d, handler);
@@ -596,6 +623,11 @@ impl ChannelPoller {
         }
     }
 
+    /// Release
+    pub fn release(&mut self) {
+        self.handlers.borrow_mut().drain(..);
+    }
+
     /// Register handler.
     pub fn register_handler(&self, handler: Box<dyn ChannelHandler>) {
         self.handlers.borrow_mut().push(handler);
@@ -631,6 +663,7 @@ mod tests {
     use std::sync::mpsc;
     use std::sync::Mutex;
     use std::thread;
+    use log::error;
 
     /// Simple event test.
     struct TestState {

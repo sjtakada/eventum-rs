@@ -10,10 +10,11 @@ use std::io::Read;
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::Weak;
 use std::sync::Mutex;
 use std::time::Duration;
 
-use log::debug;
+//use log::debug;
 use mio::net::UnixStream;
 
 use super::core::*;
@@ -30,8 +31,8 @@ pub trait UdsClientHandler {
     fn handle_message(&self, entry: &UdsClient) -> Result<(), EventError>;
 }
 
-unsafe impl Send for UdsClient {}
-unsafe impl Sync for UdsClient {}
+//unsafe impl Send for UdsClient {}
+//unsafe impl Sync for UdsClient {}
 
 /// Unix Domain Socket client entry, created per connect.
 pub struct UdsClient {
@@ -142,7 +143,7 @@ pub struct UdsClientInner {
     path: PathBuf,
 
     /// UdsClient.
-    client: Arc<Mutex<UdsClient>>,
+    client: Weak<Mutex<UdsClient>>,
 
     /// Event manager.
     event_manager: Arc<Mutex<EventManager>>,
@@ -165,7 +166,7 @@ impl UdsClientInner {
     ) -> UdsClientInner {
         UdsClientInner {
             path: path.clone(),
-            client: client,
+            client: Arc::downgrade(&client),
             event_manager: event_manager,
             handler: RefCell::new(handler),
             stream: RefCell::new(None),
@@ -244,14 +245,16 @@ impl EventHandler for UdsClientInner {
         match e {
             EventType::TimerEvent => {
                 // Reconnect timer expired.
-                let client = self.client.lock().unwrap();
+                let client = self.client.upgrade().unwrap();
+                let client = client.lock().unwrap();
                 client.connect();
 
                 Ok(())
             }
             EventType::ReadEvent => {
                 let handler = self.handler.borrow_mut();
-                let client = self.client.lock().unwrap();
+                let client = self.client.upgrade().unwrap();
+                let client = client.lock().unwrap();
 
                 // Dispatch message to message handler.
                 if let Err(_) = handler.handle_message(&*client) {
@@ -266,7 +269,8 @@ impl EventHandler for UdsClientInner {
                 self.stream.borrow_mut().take();
 
                 // TODO: Schedule reconnect timer.
-                let client = self.client.lock().unwrap();
+                let client = self.client.upgrade().unwrap();
+                let client = client.lock().unwrap();
                 client.connect_timer();
 
                 let handler = self.handler.borrow_mut();
