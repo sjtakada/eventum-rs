@@ -54,6 +54,10 @@ quick_error! {
             description("No stream")
             display(r#"No stream"#)
         }
+        UdsServerError(s: String) {
+            description("UdsServerError")
+            display(r#"UdsServerError {}"#, s)
+        }
         ChannelError(s: String) {
             description("Channel error")
             display(r#"Channel error {}"#, s)

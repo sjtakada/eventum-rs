@@ -314,3 +314,7 @@ impl EventHandler for UdsServerInner {
         Ok(())
     }
 }
+
+unsafe impl Send for UdsServer {}
+unsafe impl Sync for UdsServer {}
+
